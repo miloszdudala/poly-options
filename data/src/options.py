@@ -10,7 +10,8 @@ import datetime as dt
 import re
 
 from config import Underlying, markets_cfg, underlyings_cfg
-from storage import write_raw, write_table
+from levels import StrikeFilter
+from storage import raw_enabled, write_raw, write_table
 from util import Http, get_logger, market_tz, now_utc, parse_iso, utc_iso, yf_pause
 
 log = get_logger("options")
@@ -68,7 +69,8 @@ def select_expiries(expiries: list[str], today: dt.date | None = None) -> list[s
 # --------------------------------------------------------------------- Cboe
 
 
-def fetch_cboe(http: Http, und: Underlying, cycle_id: str) -> tuple[list[dict], list[dict]]:
+def fetch_cboe(http: Http, und: Underlying, cycle_id: str,
+               strikes: "StrikeFilter | None" = None) -> tuple[list[dict], list[dict]]:
     """Cboe delayed quotes. Returns (option rows, underlying quote rows).
 
     Indices take a leading underscore (_SPX); the plain symbol returns 403.
@@ -79,7 +81,8 @@ def fetch_cboe(http: Http, und: Underlying, cycle_id: str) -> tuple[list[dict], 
     if not payload:
         return [], []
 
-    write_raw("cboe", und.symbol, payload, cycle_id)
+    if raw_enabled("option_chains"):
+        write_raw("cboe", und.symbol, payload, cycle_id)
     fetched_at = utc_iso()
     data = payload.get("data") or {}
     # Cboe publishes a naive timestamp in US Eastern.
@@ -92,10 +95,13 @@ def fetch_cboe(http: Http, und: Underlying, cycle_id: str) -> tuple[list[dict], 
         if parse_occ(o.get("option", ""))
     ]))
 
+    spot_price = data.get("current_price")
     rows = []
     for o in data.get("options") or []:
         occ = parse_occ(o.get("option", ""))
         if not occ or occ["expiry"] not in wanted:
+            continue
+        if strikes and not strikes.accepts(und.symbol, occ["strike"], spot_price):
             continue
         last_trade = parse_iso(o.get("last_trade_time"), assume_tz=market_tz())
         rows.append({
@@ -156,7 +162,9 @@ def fetch_cboe(http: Http, und: Underlying, cycle_id: str) -> tuple[list[dict], 
 # ----------------------------------------------------------------- yfinance
 
 
-def fetch_yfinance(und: Underlying, cycle_id: str, failures: list) -> tuple[list[dict], list[dict]]:
+def fetch_yfinance(und: Underlying, cycle_id: str, failures: list,
+                   strikes: "StrikeFilter | None" = None,
+                   spot: float | None = None) -> tuple[list[dict], list[dict]]:
     """yfinance chain + spot. Never raises: one bad ticker must not stop the run."""
     import yfinance as yf
 
@@ -186,6 +194,8 @@ def fetch_yfinance(und: Underlying, cycle_id: str, failures: list) -> tuple[list
             continue
         for kind, frame in (("call", chain.calls), ("put", chain.puts)):
             for rec in frame.to_dict("records"):
+                if strikes and not strikes.accepts(und.symbol, rec.get("strike"), spot):
+                    continue
                 last_trade = rec.get("lastTradeDate")
                 rows.append({
                     "cycle_id": cycle_id,
@@ -237,39 +247,57 @@ def fetch_yfinance(und: Underlying, cycle_id: str, failures: list) -> tuple[list
     return rows, spot
 
 
-def collect_options(http: Http, underlyings: list[Underlying], cycle_id: str) -> dict:
-    """Collect both sources for every underlying; failures are isolated per name."""
+def collect_options(http: Http, underlyings: list[Underlying], cycle_id: str,
+                    include_yfinance: bool | None = None) -> dict:
+    """Collect option chains; failures are isolated per underlying.
+
+    Cboe is the per-cycle source: it covers all 25 tickers in ~29 s and carries
+    bid/ask sizes, greeks and per-contract quote times. yfinance costs ~406 s for
+    the same tickers because every expiry is a separate paced request, so by
+    default it runs only in the daily job, as an independent cross-check.
+    """
     use_cboe = markets_cfg()["cboe"].get("enabled", True)
+    if include_yfinance is None:
+        include_yfinance = underlyings_cfg()["options"].get("yfinance_every_cycle", False)
+
+    strikes = StrikeFilter()
     opt_rows: list[dict] = []
     spot_rows: list[dict] = []
     per_source = {"cboe": 0, "yfinance": 0}
 
     for und in underlyings:
+        spot = None
         if use_cboe:
             try:
-                rows, spot = fetch_cboe(http, und, cycle_id)
+                rows, spot_got = fetch_cboe(http, und, cycle_id, strikes)
             except Exception as exc:
                 log.exception("cboe failed for %s", und.symbol)
                 http.failures.append({"venue": "cboe", "identifier": und.symbol,
                                       "url": "", "error": str(exc),
                                       "failed_at_utc": utc_iso()})
-                rows, spot = [], []
+                rows, spot_got = [], []
             opt_rows += rows
-            spot_rows += spot
+            spot_rows += spot_got
             per_source["cboe"] += len(rows)
+            if spot_got:
+                spot = spot_got[0].get("last_price")
 
-        try:
-            rows, spot = fetch_yfinance(und, cycle_id, http.failures)
-        except Exception as exc:
-            log.exception("yfinance failed for %s", und.symbol)
-            rows, spot = [], []
-        opt_rows += rows
-        spot_rows += spot
-        per_source["yfinance"] += len(rows)
-        log.info("%-6s cboe=%-6d yf=%-6d", und.symbol, per_source["cboe"], per_source["yfinance"])
+        if include_yfinance:
+            try:
+                rows, spot_got = fetch_yfinance(und, cycle_id, http.failures, strikes, spot)
+            except Exception:
+                log.exception("yfinance failed for %s", und.symbol)
+                rows, spot_got = [], []
+            opt_rows += rows
+            spot_rows += spot_got
+            per_source["yfinance"] += len(rows)
+
+    log.info("options: cboe=%d yfinance=%d | %s",
+             per_source["cboe"], per_source["yfinance"], strikes.summary())
 
     if opt_rows:
         write_table("option_quotes", opt_rows)
     if spot_rows:
         write_table("underlying_quotes", spot_rows)
-    return {"option_quotes": len(opt_rows), "underlying_quotes": len(spot_rows), **per_source}
+    return {"option_quotes": len(opt_rows), "underlying_quotes": len(spot_rows),
+            "strikes_dropped": strikes.dropped, **per_source}

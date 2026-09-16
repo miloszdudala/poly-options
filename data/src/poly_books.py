@@ -6,7 +6,7 @@ are never stored on their own.
 from __future__ import annotations
 
 from config import markets_cfg
-from storage import write_raw, write_table
+from storage import raw_enabled, write_raw, write_table
 from util import Http, chunked, get_logger, parallel_map, parse_epoch, utc_iso
 
 log = get_logger("poly.books")
@@ -120,7 +120,8 @@ def collect_books(http: Http, markets: list[dict], cycle_id: str) -> dict:
                     books_by_token[tid] = single
             continue
 
-        write_raw("polymarket", f"books_{batch[0][:16]}", payload, cycle_id)
+        if raw_enabled("books"):
+            write_raw("polymarket", f"books_{batch[0][:16]}", payload, cycle_id)
         # The batch endpoint does NOT preserve request order - key on asset_id.
         for book in payload if isinstance(payload, list) else []:
             tid = str(book.get("asset_id") or "")
@@ -139,51 +140,15 @@ def collect_books(http: Http, markets: list[dict], cycle_id: str) -> dict:
     if all_rows:
         write_table("poly_books", all_rows)
 
+    # The book payload carries its own last_trade_price, which is written onto
+    # every level row as book_last_trade_price - so there is no separate
+    # last-trade table: it would duplicate a column we already store.
     return {
         "tokens_requested": len(token_ids),
         "tokens_returned": len(got_tokens),
         "levels": len(all_rows),
         "missing": len(missing),
     }, books_by_token
-
-
-def collect_last_trades(markets: list[dict], cycle_id: str,
-                        books_by_token: dict[str, dict]) -> int:
-    """Last trade price per token.
-
-    Derived from the book payloads already fetched: every CLOB book carries its
-    own `last_trade_price`, so this costs no extra requests. Querying
-    /last-trade-price per token instead meant ~2.5k sequential round trips,
-    which did not fit inside a 15-minute cadence.
-    """
-    fetched_at = utc_iso()
-    rows = []
-    for m in markets:
-        for idx in (0, 1):
-            tid = m.get(f"token_id_{idx}")
-            if not tid:
-                continue
-            book = books_by_token.get(str(tid))
-            if not book:
-                continue
-            try:
-                price = float(book.get("last_trade_price"))
-            except (TypeError, ValueError):
-                continue
-            rows.append({
-                "cycle_id": cycle_id,
-                "fetched_at_utc": fetched_at,
-                "token_id": str(tid),
-                "market_id": m.get("market_id"),
-                "ticker": m.get("ticker"),
-                "outcome": m.get(f"outcome_{idx}"),
-                "outcome_index": idx,
-                "last_trade_price": price,
-                "side": None,
-            })
-    if rows:
-        write_table("poly_trades_last", rows)
-    return len(rows)
 
 
 def collect_price_history(http: Http, markets: list[dict], cycle_id: str,

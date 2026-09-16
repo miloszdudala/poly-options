@@ -13,7 +13,7 @@ stored as given, plus a derived yes-equivalent ask, so nothing is lost.
 from __future__ import annotations
 
 from config import markets_cfg
-from storage import write_raw, write_table
+from storage import raw_enabled, write_meta, write_raw, write_raw_once, write_table
 from util import Http, get_logger, parallel_map, utc_iso
 
 log = get_logger("kalshi")
@@ -56,8 +56,8 @@ def fetch_markets(http: Http, series_ticker: str, cycle_id: str) -> list[dict]:
         markets = payload.get("markets") or []
         if not markets:
             break
-        if page == 0:
-            write_raw("kalshi", f"markets_{series_ticker}", payload, cycle_id)
+        if page == 0 and raw_enabled("market_rules"):
+            write_raw_once("kalshi", f"markets_{series_ticker}", payload, cycle_id)
 
         for m in markets:
             rows.append({
@@ -184,6 +184,10 @@ def collect(http: Http, cycle_id: str, with_books: bool = True) -> dict:
 
     if market_rows:
         write_table("kalshi_markets", market_rows)
+        # Kept so the option strike filter can see which index levels we track.
+        write_meta("kalshi_markets_latest", {"cycle_id": cycle_id, "markets": [
+            {k: m.get(k) for k in ("series_ticker", "ticker", "floor_strike", "cap_strike")}
+            for m in market_rows]})
 
     book_rows: list[dict] = []
     if with_books:
@@ -200,7 +204,7 @@ def collect(http: Http, cycle_id: str, with_books: bool = True) -> dict:
             book_rows += rows
             if payload is not None:
                 raw_books[market["ticker"]] = payload
-        if raw_books:
+        if raw_books and raw_enabled("books"):
             # One archive per cycle, keyed by ticker, instead of one file each.
             write_raw("kalshi", "orderbooks", raw_books, cycle_id)
         if book_rows:

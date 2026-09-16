@@ -9,7 +9,7 @@ import datetime as dt
 
 import pandas as pd
 
-from config import Underlying, underlyings_cfg
+from config import PARQUET_DIR, Underlying, underlyings_cfg
 from storage import write_table
 from util import get_logger, market_tz, utc_iso, yf_pause
 
@@ -40,56 +40,86 @@ def _bar_rows(frame: "pd.DataFrame", symbol: str, interval: str,
     return rows
 
 
+def _last_bar_time() -> dict[tuple[str, str], str]:
+    """Newest stored bar per (symbol, interval), so we only fetch what is new."""
+    root = PARQUET_DIR / "underlying_bars"
+    if not root.exists() or not any(root.rglob("*.parquet")):
+        return {}
+    import duckdb
+
+    try:
+        rows = duckdb.sql(
+            f"""select symbol, interval, max(bar_time_utc) mx
+                from read_parquet('{root}/**/*.parquet', hive_partitioning=true)
+                group by 1, 2"""
+        ).fetchall()
+    except Exception as exc:  # a partial/corrupt partition must not stop the run
+        log.warning("could not read existing bars, refetching in full: %s", exc)
+        return {}
+    return {(r[0], r[1]): r[2] for r in rows if r[2]}
+
+
 def collect_bars(symbols: list[tuple[str, str]], cycle_id: str, failures: list,
-                 daily_period: str = "5y") -> dict:
-    """Daily OHLCV plus the finest intraday bars the source will give us.
+                 daily_period: str | None = None) -> dict:
+    """Daily OHLCV plus intraday bars, fetched incrementally.
+
+    The first run backfills; later runs ask only for sessions newer than what is
+    already stored. Re-downloading five years every day wrote ~1.4 GB/yr of rows
+    that were already on disk.
 
     `symbols` is a list of (canonical_symbol, yfinance_symbol).
     """
+    import datetime as _dt
+
     import yfinance as yf
 
+    cfg = underlyings_cfg().get("bars", {}) or {}
+    daily_period = daily_period or cfg.get("daily_backfill_period", "5y")
+    intraday = cfg.get("intraday") or [{"interval": "5m", "period": "60d"}]
+
     fetched_at = utc_iso()
-    counts = {"daily": 0, "1m": 0, "5m": 0}
+    counts: dict = {"daily": 0}
     rows: list[dict] = []
+    seen = _last_bar_time()
+
+    def fetch(ticker, symbol, yf_symbol, interval, period):
+        """Ask only for what is missing, falling back to the full window."""
+        last = seen.get((symbol, interval))
+        kwargs = {"interval": interval, "auto_adjust": False}
+        if last:
+            start = _dt.datetime.fromisoformat(last) + _dt.timedelta(seconds=1)
+            kwargs["start"] = start
+        else:
+            kwargs["period"] = period
+        return ticker.history(**kwargs)
 
     for symbol, yf_symbol in symbols:
         ticker = yf.Ticker(yf_symbol)
 
-        # --- daily backfill ---
-        yf_pause()
-        try:
-            daily = ticker.history(period=daily_period, interval="1d", auto_adjust=False)
-            got = _bar_rows(daily, symbol, "1d", cycle_id, fetched_at)
-            rows += got
-            counts["daily"] += len(got)
-        except Exception as exc:
-            failures.append({"venue": "yfinance", "identifier": f"{symbol}:1d",
-                             "url": f"yf:{yf_symbol}", "error": str(exc),
-                             "failed_at_utc": utc_iso()})
-
-        # --- intraday: 1-minute where allowed, else 5-minute ---
-        for interval, period in (("1m", "7d"), ("5m", "60d")):
+        for interval, period in [("1d", daily_period)] + [
+                (i["interval"], i["period"]) for i in intraday]:
             yf_pause()
             try:
-                bars = ticker.history(period=period, interval=interval, auto_adjust=False)
+                bars = fetch(ticker, symbol, yf_symbol, interval, period)
             except Exception as exc:
                 failures.append({"venue": "yfinance", "identifier": f"{symbol}:{interval}",
                                  "url": f"yf:{yf_symbol}", "error": str(exc),
                                  "failed_at_utc": utc_iso()})
                 continue
             if bars is None or len(bars) == 0:
-                log.info("%s: no %s bars available", symbol, interval)
                 continue
             got = _bar_rows(bars, symbol, interval, cycle_id, fetched_at)
             rows += got
-            counts[interval] = counts.get(interval, 0) + len(got)
+            key = "daily" if interval == "1d" else interval
+            counts[key] = counts.get(key, 0) + len(got)
 
-        log.info("%-8s bars so far daily=%d 1m=%d 5m=%d",
-                 symbol, counts["daily"], counts["1m"], counts["5m"])
+        log.info("%-8s bars %s", symbol,
+                 " ".join(f"{k}={v}" for k, v in counts.items() if k != "total_rows"))
 
     if rows:
         write_table("underlying_bars", rows)
     counts["total_rows"] = len(rows)
+    counts["incremental"] = bool(seen)
     return counts
 
 

@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.join(_HERE, "src"))
 from config import PARQUET_DIR  # noqa: E402
 
 TABLES = [
-    "runs", "poly_markets", "poly_books", "poly_trades_last", "poly_price_history",
+    "runs", "poly_markets", "poly_books", "poly_price_history",
     "poly_unparsed", "kalshi_markets", "kalshi_books", "option_quotes",
     "underlying_quotes", "underlying_bars", "rates", "dividends", "earnings",
     "resolutions", "failures",

@@ -85,7 +85,7 @@ backwards.
 
 ### Tables
 
-`poly_markets`, `poly_books`, `poly_trades_last`, `poly_price_history`,
+`poly_markets`, `poly_books`, `poly_price_history`,
 `poly_unparsed`, `kalshi_markets`, `kalshi_books`, `option_quotes`,
 `underlying_quotes`, `underlying_bars`, `rates`, `dividends`, `earnings`,
 `resolutions`, `runs`, `failures`.
@@ -118,6 +118,54 @@ without code changes.
 Cover strike/barrier/type parsing (every string taken verbatim from the live
 API), timestamp and timezone handling including the 1 November 2026 DST change,
 order-book flattening, expiry selection, and the cadence guard.
+
+## What it costs to run
+
+Measured, not estimated. One snapshot during US hours writes ~3.5 MB; 26 of
+those a day, 252 days a year:
+
+| item | per year | why it is that size |
+|---|---|---|
+| `option_quotes` | ~19 GB | ~60k contracts/cycle: every strike and expiry within 45 days, for 25 underlyings |
+| `poly_books` | ~5 GB | full depth, both outcome tokens, ~33k price levels/cycle |
+| `kalshi_books` | ~2.6 GB | ~3.5k markets, one book each |
+| `kalshi_markets` | ~1.1 GB | quotes, volume and open interest per market |
+| everything else | ~0.5 GB | bars, rates, dividends, earnings, discovery, spot |
+| **total** | **~28 GB** | |
+
+A full cycle takes about 3 minutes: Polymarket books 13 s, Kalshi 142 s, options
+23 s. Kalshi is the slow part because it only serves one order book per request.
+
+Three settings move these numbers:
+
+- `kalshi.interval_minutes` (markets.yaml) - set to `60` to run Kalshi hourly
+  instead of every tick: saves ~2.8 GB/yr and drops 142 s from three ticks in
+  four. It is the secondary track.
+- `options.strikes` (underlyings.yaml) - the core band around spot. Tightening it
+  saves little: your own tracked levels span wide ranges (NFLX -74% to +80% of
+  spot, Kalshi year-end SPX ladders 4,000-10,600), and the filter deliberately
+  keeps every strike near a level you track.
+- `raw.*` (markets.yaml) - all off by default except market rules. Archiving raw
+  responses every cycle cost 54 GB/yr, 55% of the total, and no model reads it.
+
+### Why these defaults
+
+- **Raw archives are off.** `option_quotes` already stores 20 of the 23 fields
+  Cboe sends, and the missing three are derivable. Market rules text *is*
+  archived, but only once per market and again only if the venue changes it -
+  that is the record to check a disputed settlement against.
+- **yfinance runs daily, not per cycle.** Cboe covers all 25 tickers in 29 s and
+  carries bid/ask sizes, greeks and per-contract quote times. yfinance needs a
+  separate paced request per expiry - ~406 s for the same tickers - so it serves
+  as a daily cross-check instead.
+- **No 1-minute bars.** For deciding whether a barrier was touched, the high of a
+  5-minute bar is by definition the maximum of the five 1-minute highs inside it,
+  so aggregating loses nothing. 1-minute data is also a worse volatility
+  estimator, because bid-ask bounce inflates it.
+- **Bars are incremental.** The first run backfills 5 years; later runs fetch
+  only new sessions (11,868 rows -> 4).
+- **No separate last-trade table.** Each book payload carries its own
+  `last_trade_price`, stored as `book_last_trade_price` on every level row.
 
 ## Notes on the data
 

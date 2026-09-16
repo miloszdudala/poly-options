@@ -16,7 +16,7 @@ from config import ensure_dirs, underlyings
 from storage import read_meta, write_failures, write_run_summary
 from util import (
     Http, get_logger, is_regular_hours, is_trading_day, new_cycle_id, now_utc,
-    should_run_snapshot, utc_iso,
+    should_run_kalshi, should_run_snapshot, utc_iso,
 )
 
 log = get_logger("jobs")
@@ -83,14 +83,16 @@ def job_snapshot(run: Run) -> None:
     """Books at every cadence; options only during US regular hours."""
     from kalshi import collect
     from options import collect_options
-    from poly_books import collect_books, collect_last_trades
+    from poly_books import collect_books
 
     markets = _markets_for_books(run)
-    book_stats, books_by_token = collect_books(run.http, markets, run.cycle_id)
+    book_stats, _books = collect_books(run.http, markets, run.cycle_id)
     run.counts.update(book_stats)
-    run.counts["poly_last_trades"] = collect_last_trades(
-        markets, run.cycle_id, books_by_token)
-    run.counts.update(collect(run.http, run.cycle_id, with_books=True))
+
+    if should_run_kalshi():
+        run.counts.update(collect(run.http, run.cycle_id, with_books=True))
+    else:
+        run.note("kalshi cadence: skipped this tick")
 
     if is_regular_hours():
         run.counts.update(collect_options(run.http, underlyings(with_options_only=True),
@@ -103,6 +105,7 @@ def job_daily(run: Run) -> None:
     """Post-close refresh of everything slow-moving."""
     from poly_books import collect_price_history, collect_resolutions
     from poly_discover import discover
+    from options import collect_options
     from reference import collect_rates
     from underlying import collect_bars, collect_dividends_and_earnings, futures_symbols
 
@@ -111,6 +114,12 @@ def job_daily(run: Run) -> None:
     run.counts["resolutions"] = collect_resolutions(run.http, markets, run.cycle_id)
     run.counts["poly_price_history"] = collect_price_history(
         run.http, markets, run.cycle_id)
+
+    # Daily yfinance pass: an independent cross-check on Cboe quotes, kept off
+    # the 15-minute path where it cost ~406 s of a 15-minute budget.
+    run.counts.update({f"xcheck_{k}": v for k, v in collect_options(
+        run.http, underlyings(with_options_only=True), run.cycle_id,
+        include_yfinance=True).items()})
 
     run.counts.update(collect_rates(run.http, run.cycle_id))
 

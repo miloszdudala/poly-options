@@ -159,6 +159,23 @@ def should_run_snapshot(when: dt.datetime | None = None) -> tuple[bool, str]:
     return False, "off-hours, not the hourly tick"
 
 
+def should_run_kalshi(when: dt.datetime | None = None) -> tuple[bool, str]:
+    """Cadence guard for Kalshi, which the project treats as a secondary track.
+
+    Kalshi only exposes one order book per request, so all ~3.5k markets cost
+    ~140 s - most of a snapshot's runtime. Its own interval is configurable so it
+    can be thinned without touching the Polymarket cadence.
+    """
+    when = (when or now_utc()).astimezone(UTC)
+    interval = markets_cfg()["kalshi"].get("interval_minutes", 15)
+    if interval <= 15:
+        return True, "every tick"
+    minute = when.astimezone(market_tz()).minute
+    if minute % interval < 15:
+        return True, f"on the {interval}-minute boundary"
+    return False, f"not a {interval}-minute boundary"
+
+
 # ------------------------------------------------------------------ http layer
 
 

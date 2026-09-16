@@ -34,6 +34,17 @@ futures:
   WTI:    {yf_symbol: "CL=F", label: "WTI crude front-month future"}
   DXY:    {yf_symbol: "DX-Y.NYB", label: "US Dollar Index"}
 
+bars:
+  # Daily history is backfilled once, then only new sessions are appended.
+  daily_backfill_period: 5y
+  # Intraday intervals to keep. 1-minute bars are deliberately NOT collected:
+  # for deciding whether a barrier was touched, the high of a 5-minute bar is by
+  # definition the maximum of the five 1-minute highs inside it, so aggregating
+  # loses nothing. 1-minute data is also a worse volatility estimator than
+  # 5-minute because of bid-ask bounce.
+  intraday:
+    - {interval: 5m, period: 60d}
+
 # Indices and ETFs have no earnings; asking for them just produces noise.
 no_earnings: [SPX, NDX, SPY, EWY, GLD, SLV, USO, UUP]
 
@@ -41,3 +52,18 @@ options:
   # All expiries out to this many calendar days, plus the December expiry nearest year-end.
   max_days_out: 45
   include_year_end_december: true
+
+  # Which strikes to keep. Cboe publishes one fixed file per ticker (all 141k
+  # contracts), so this trims what we STORE, not what we fetch.
+  # A strike is kept if it is either inside the core band around spot, or close
+  # to a level we actually track on Polymarket/Kalshi - so a tracked market can
+  # never lose the strikes needed to price it, however far from spot it sits.
+  strikes:
+    spot_band: 0.30      # keep strikes within +/-30% of spot
+    level_margin: 0.10   # ...or within 10% of any tracked market level
+    enabled: true
+
+  # yfinance duplicates Cboe, which is richer and 14x faster (29s vs ~406s for
+  # all 25 tickers). It runs once a day as an independent cross-check instead of
+  # on every 15-minute cycle. Set true to go back to every cycle.
+  yfinance_every_cycle: false

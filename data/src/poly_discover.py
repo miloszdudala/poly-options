@@ -11,7 +11,7 @@ from typing import Any
 
 from config import markets_cfg
 from poly_parse import parse_market, parse_ticker
-from storage import write_meta, write_raw, write_table
+from storage import raw_enabled, write_meta, write_raw_once, write_table
 from util import Http, get_logger, utc_iso
 
 log = get_logger("poly.discover")
@@ -192,22 +192,12 @@ def discover(http: Http, cycle_id: str) -> list[dict]:
         kept_events, len(rows), len(unparsed),
     )
 
-    # Archive the matched events in full, plus a slim index of everything that was
-    # walked. Storing all ~20k open events verbatim cost ~88 MB per run for the
-    # ~130 we actually track; the index preserves the audit trail (what existed,
-    # and what the filter chose not to keep) for a fraction of a percent of that.
-    write_raw("polymarket", "events_matched", kept, cycle_id)
-    write_raw("polymarket", "events_index", [
-        {
-            "id": e.get("id"),
-            "slug": e.get("slug"),
-            "title": e.get("title"),
-            "endDate": e.get("endDate"),
-            "tags": [t.get("slug") for t in (e.get("tags") or [])],
-            "matched": bool(event_matches(e, disc)[0]),
-        }
-        for e in events
-    ], cycle_id)
+    # Archive the matched events, but only when the venue's own text changes -
+    # rules and metadata are static per market, so re-storing them every run buys
+    # nothing. This is the only raw we keep: if a settlement is ever disputed, it
+    # is the untouched record of what the venue said the bet meant.
+    if raw_enabled("market_rules"):
+        write_raw_once("polymarket", "events_matched", kept, cycle_id)
     if unparsed:
         for item in unparsed[:20]:
             log.warning("UNPARSED market %s: %r (%s)",

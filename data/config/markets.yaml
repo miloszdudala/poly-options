@@ -31,11 +31,43 @@ polymarket:
     # ticker that passes the pattern + blocklist filters (default, so new months just work).
     ticker_allowlist: []
 
+# Raw archiving. Per-cycle raw was 54 GB/yr and no model ever reads it; every
+# field we parse is already in Parquet. Market rules/metadata ARE archived, but
+# only once per market and again only if the venue changes the text.
+raw:
+  archive_books: false
+  archive_option_chains: false
+  archive_market_rules: true
+
 kalshi:
   base: https://api.elections.kalshi.com/trade-api/v2
   orderbook_depth: 100
+  # Kalshi is the secondary track and is the slowest part of a snapshot (~140s
+  # for ~3.5k single-book requests). 15 = every tick; 60 = hourly.
+  interval_minutes: 15
   # Kalshi exposes one book per request; fetch them concurrently.
   book_workers: 8
+  # Which underlying each series is written on, so its strikes can drive the
+  # option strike filter for SPX / NDX (neither has a Polymarket market).
+  series_underlying:
+    KXINXU: SPX
+    KXINX: SPX
+    KXINXDUD: SPX
+    KXINXY: SPX
+    KXINXDIRY: SPX
+    KXINXPOS: SPX
+    KXINXMAXY: SPX
+    KXINXMINY: SPX
+    KXSP500WHEN: SPX
+    KXNASDAQ100U: NDX
+    KXNASDAQ100: NDX
+    KXNASDAQDUD: NDX
+    KXNASDAQ100Y: NDX
+    KXNDQDIRY: NDX
+    KXNASDAQ100POS: NDX
+    KXNASDAQ100MAXY: NDX
+    KXNASDAQ100MINY: NDX
+
   series:
     index_digitals: [KXINXU, KXINX, KXINXDUD, KXNASDAQ100U, KXNASDAQ100, KXNASDAQDUD]
     year_end: [KXINXY, KXINXDIRY, KXNASDAQ100Y, KXNDQDIRY, KXINXPOS, KXNASDAQ100POS]

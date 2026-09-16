@@ -48,10 +48,6 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("book_last_trade_price", F),
         ("side", S), ("level_rank", I), ("depth_rank", I), ("price", F), ("size", F),
     ]),
-    "poly_trades_last": _schema([
-        ("token_id", S), ("market_id", S), ("ticker", S), ("outcome", S),
-        ("outcome_index", I), ("last_trade_price", F), ("side", S),
-    ]),
     "poly_price_history": _schema([
         ("token_id", S), ("market_id", S), ("ticker", S), ("outcome_index", I),
         ("point_time_utc", S), ("price", F), ("interval", S), ("fidelity", I),

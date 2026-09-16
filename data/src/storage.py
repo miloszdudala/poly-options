@@ -23,6 +23,14 @@ def _safe(name: str) -> str:
     return _SAFE.sub("_", str(name))[:120]
 
 
+def raw_enabled(kind: str) -> bool:
+    """Whether this class of raw archive is switched on in markets.yaml."""
+    from config import markets_cfg
+
+    cfg = markets_cfg().get("raw", {}) or {}
+    return bool(cfg.get(f"archive_{kind}", False))
+
+
 def write_raw(venue: str, identifier: str, payload: Any, cycle_id: str) -> Path:
     """Archive a response verbatim: store/raw/{venue}/{date}/{cycle}_{id}.json.gz"""
     day = now_utc().strftime("%Y-%m-%d")
@@ -77,6 +85,35 @@ def _stringify(rows: Sequence[dict]) -> list[dict]:
                 clean[key] = value
         out.append(clean)
     return out
+
+
+def write_raw_once(venue: str, identifier: str, payload: Any, cycle_id: str) -> Path | None:
+    """Archive a payload only the first time we see it, or when it changes.
+
+    Used for market rules and metadata: the venue's own description of a bet does
+    not change from cycle to cycle, so storing it every 15 minutes is pure waste,
+    but losing it entirely would leave nothing to check a disputed settlement
+    against.
+    """
+    import hashlib
+
+    body = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    digest = hashlib.sha256(body.encode()).hexdigest()[:16]
+    seen_path = META_DIR / "raw_once_seen.json"
+    META_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(seen_path) as fh:
+            seen = json.load(fh)
+    except (OSError, ValueError):
+        seen = {}
+    key = f"{venue}/{_safe(identifier)}"
+    if seen.get(key) == digest:
+        return None
+    path = write_raw(venue, identifier, body, cycle_id)
+    seen[key] = digest
+    with open(seen_path, "w") as fh:
+        json.dump(seen, fh)
+    return path
 
 
 def write_meta(name: str, payload: Any) -> Path:
