@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.polyoptions.snapshot</string>
+
+    <!-- Every 15 minutes, around the clock. The job itself decides what to do:
+         option chains are fetched only during the NYSE regular session, books
+         are always fetched. Off-hours thinning is handled by the guard below. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/.venv/bin/python</string>
+        <string>__REPO__/data/src/jobs.py</string>
+        <string>snapshot</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__REPO__/data/logs/launchd-snapshot.out</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/data/logs/launchd-snapshot.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>

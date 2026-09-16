@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.polyoptions.daily</string>
+
+    <!-- Metadata refresh, rates, dividends, earnings, bars, price history.
+         17:30 America/New_York, after the US close. launchd calendar entries use
+         LOCAL wall-clock time, so the hour below is written in this machine's own
+         timezone by the install script, which converts from 17:30 ET for today's
+         DST state and re-converts whenever you re-run it. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/.venv/bin/python</string>
+        <string>__REPO__/data/src/jobs.py</string>
+        <string>daily</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>__DAILY_HOUR__</integer>
+        <key>Minute</key>
+        <integer>__DAILY_MINUTE__</integer>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__REPO__/data/logs/launchd-daily.out</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/data/logs/launchd-daily.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>

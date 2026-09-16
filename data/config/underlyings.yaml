@@ -1,0 +1,43 @@
+# Underlyings to collect options / spot / bars for.
+# cboe_symbol: symbol used by the Cboe delayed-quotes CDN (indices take a leading underscore).
+# yf_symbol:   symbol used by yfinance.
+# options:     collect an option chain for this name.
+tiers:
+  tier1:
+    options: true
+    names: [AAPL, MSFT, NVDA, AMZN, GOOGL, META, NFLX, TSLA, PLTR, MU]
+  tier2:
+    options: true
+    names: [OPEN, SPCX, COIN, HOOD, RKLB, ABNB, SPY, EWY, MSTR]
+  index:
+    options: true
+    names: [SPX, NDX]
+  tier3:
+    options: true
+    names: [GLD, SLV, USO, UUP]
+
+# Per-symbol overrides. Anything not listed uses symbol == cboe_symbol == yf_symbol.
+overrides:
+  SPX:
+    cboe_symbol: _SPX
+    yf_symbol: ^SPX
+    is_index: true
+  NDX:
+    cboe_symbol: _NDX
+    yf_symbol: ^NDX
+    is_index: true
+
+# Futures proxies for the commodity / FX hit markets (free sources only).
+futures:
+  XAUUSD: {yf_symbol: "GC=F", label: "Gold front-month future"}
+  XAGUSD: {yf_symbol: "SI=F", label: "Silver front-month future"}
+  WTI:    {yf_symbol: "CL=F", label: "WTI crude front-month future"}
+  DXY:    {yf_symbol: "DX-Y.NYB", label: "US Dollar Index"}
+
+# Indices and ETFs have no earnings; asking for them just produces noise.
+no_earnings: [SPX, NDX, SPY, EWY, GLD, SLV, USO, UUP]
+
+options:
+  # All expiries out to this many calendar days, plus the December expiry nearest year-end.
+  max_days_out: 45
+  include_year_end_december: true
