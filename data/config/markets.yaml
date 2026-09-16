@@ -44,7 +44,7 @@ kalshi:
   orderbook_depth: 100
   # Kalshi is the secondary track and is the slowest part of a snapshot (~140s
   # for ~3.5k single-book requests). 15 = every tick; 60 = hourly.
-  interval_minutes: 15
+  interval_minutes: 60
   # Kalshi exposes one book per request; fetch them concurrently.
   book_workers: 8
   # Which underlying each series is written on, so its strikes can drive the
