@@ -174,6 +174,33 @@ def fetch_orderbook(http: Http, market: dict, cycle_id: str) -> tuple[list[dict]
     return rows, payload
 
 
+def wants_book(market: dict) -> bool:
+    """Whether this market earns a separate depth request.
+
+    Every market's top of book is already stored: GET /markets returns
+    yes_bid/yes_ask and their sizes for all of them in ~10 paged requests. Depth
+    costs one request EACH, and most of the ladder does not deserve one - of
+    3,519 open markets on 2026-09-16, 268 had ever traded and ~1,000 were quoted
+    more than 20c wide having never traded. Those are ladder fillers: a quote
+    that wide is not an offer anyone can lift, so its depth tells you nothing.
+
+    Kept if it has ever traded, or is quoted tightly enough to be liftable, or
+    belongs to a series we always want priced. A market with no quote at all is
+    kept only if it has traded - otherwise there is nothing there.
+    """
+    cfg = markets_cfg()["kalshi"].get("book_filter") or {}
+    if not cfg.get("enabled", False):
+        return True
+    if market.get("series_ticker") in set(cfg.get("always_series") or []):
+        return True
+    if (market.get("open_interest") or 0) > 0 or (market.get("volume") or 0) > 0:
+        return True
+    bid, ask = market.get("yes_bid"), market.get("yes_ask")
+    if bid is None or ask is None:
+        return False
+    return (ask - bid) <= cfg.get("max_spread", 0.20)
+
+
 def collect(http: Http, cycle_id: str, with_books: bool = True) -> dict:
     """Markets + full books for every configured series."""
     market_rows: list[dict] = []
@@ -190,14 +217,21 @@ def collect(http: Http, cycle_id: str, with_books: bool = True) -> dict:
             for m in market_rows]})
 
     book_rows: list[dict] = []
+    book_markets: list[dict] = []
     if with_books:
         # Kalshi only exposes one book per request, so fetch them concurrently;
         # sequentially this alone overran the 15-minute snapshot cadence.
+        book_markets = [m for m in market_rows if wants_book(m)]
+        skipped = len(market_rows) - len(book_markets)
+        if skipped:
+            log.info("depth: %d markets, %d skipped as unliftable (top of book "
+                     "still stored for all %d)", len(book_markets), skipped,
+                     len(market_rows))
         workers = markets_cfg()["kalshi"].get("book_workers", 8)
         results = parallel_map(
-            lambda m: fetch_orderbook(http, m, cycle_id), market_rows, workers=workers)
+            lambda m: fetch_orderbook(http, m, cycle_id), book_markets, workers=workers)
         raw_books: dict[str, dict] = {}
-        for market, got in zip(market_rows, results):
+        for market, got in zip(book_markets, results):
             if not got:
                 continue
             rows, payload = got
@@ -210,4 +244,6 @@ def collect(http: Http, cycle_id: str, with_books: bool = True) -> dict:
         if book_rows:
             write_table("kalshi_books", book_rows)
 
-    return {"kalshi_markets": len(market_rows), "kalshi_book_levels": len(book_rows)}
+    return {"kalshi_markets": len(market_rows),
+            "kalshi_books_fetched": len(book_markets),
+            "kalshi_book_levels": len(book_rows)}

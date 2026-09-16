@@ -13,7 +13,7 @@ import time
 import traceback
 
 from config import ensure_dirs, underlyings
-from storage import read_meta, write_failures, write_run_summary
+from storage import read_meta, write_failures, write_meta, write_run_summary
 from util import (
     Http, get_logger, is_regular_hours, is_trading_day, new_cycle_id, now_utc,
     should_run_kalshi, should_run_snapshot, utc_iso,
@@ -56,6 +56,8 @@ class Run:
             "notes": "; ".join(self.notes) or None,
         }
         write_run_summary(row)
+        write_meta("last_tick", {"at_utc": utc_iso(ended), "job": self.job,
+                                 "ran": True, "reason": self.status})
         log.info("RUN %s %s in %.1fs counts=%s failures=%d",
                  self.job, self.status, row["duration_seconds"],
                  row["counts_json"], row["failure_count"])
@@ -151,8 +153,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.job == "snapshot" and not args.force:
         ok, why = should_run_snapshot()
         if not ok:
-            run.note(f"cadence guard: {why}")
-            run.finish("skipped")
+            # A skipped tick is a heartbeat, not a run. launchd fires every 15
+            # minutes around the clock but only the NYSE session is collected,
+            # so ~70 of the ~96 daily ticks skip - writing a `runs` row for each
+            # would add ~25k single-row Parquet files a year to say nothing
+            # happened. One overwritten meta file records the same fact, and it
+            # is the thing to check to prove the machine was awake.
+            log.info("cadence guard: %s", why)
+            write_meta("last_tick", {"at_utc": utc_iso(), "job": args.job,
+                                     "ran": False, "reason": why})
             return 0
 
     try:

@@ -77,3 +77,37 @@ Also store the underlying spot with its timestamp.
 - Storage: SQLite, one table per venue plus an options table and a market-metadata table.
 - Each run is a short script (fetch → append → exit) scheduled by launchd on macOS. Log every failed request.
 - Retries with backoff and randomised pauses; yfinance is unofficial and throttles.
+
+## Measured liquidity history (checked 2026-09-16)
+
+Cumulative lifetime volume per event, fetched from Gamma by slug, for the same
+ten equity tickers (AAPL MSFT NVDA AMZN GOOGL META NFLX TSLA PLTR MU). This was
+run to test whether the "hit" markets absorbed the volume that drained out of
+"close above". **They did not — every series shrank.**
+
+| month | monthly close-above | weekly close-above | hit |
+|---|---|---|---|
+| Feb | 1,914,381 | 3,711,621 | 2,439,692 |
+| Mar | 1,648,466 | 609,982 | 2,470,340 |
+| Apr | 361,984 | 865,671 | 864,164 |
+| May | *not listed* | 503,188 | 2,477,521 |
+| Jun | 158,607 | 507,934 | 943,835 |
+| Jul | 105,149 | 272,761 | 886,835 |
+| Aug | 70,173 | 217,062 | 538,803 |
+| Sep (to 16th) | 2,492 | 148,345 | 257,244 |
+
+Feb to Aug: monthly close-above -96%, weekly close-above -94%, hit -78%. The
+whole equity category fell from ~8.1M to ~0.8M a month. Hit's *share* of the two
+rose from 56% to 88%, which looks like rotation until you notice it is a bigger
+slice of a much smaller pie.
+
+So the thing to watch for before trusting these markets again is a
+**category-wide** recovery, not flow rotating back into close-above. Monthly
+close-above ladders were simply not listed for May 2026, which is worth knowing
+before reading a zero as a collapse.
+
+Caveats: September is a partial month (16 of 30 days). Volume is the venue's own
+cumulative figure per event, not reconstructed from trades. Commodity and FX hit
+markets are excluded here - WTI alone did 4.0M in September, an order of
+magnitude more than every tracked equity market combined, and mixing it in hides
+the equity trend entirely.

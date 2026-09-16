@@ -84,3 +84,15 @@ def test_malformed_levels_are_skipped_not_fatal():
     book = dict(REAL_BOOK, bids=[{"price": "abc", "size": "1"}, {"price": "0.5", "size": "2"}])
     r = [x for x in _levels(book, META, "c", "t") if x["side"] == "bid"]
     assert len(r) == 1 and r[0]["price"] == 0.5
+
+
+def test_expiry_travels_with_every_level():
+    """(ticker, strike, contract_type) is not unique across months.
+
+    MSFT close_above 510 is open in four different months at once, so a group-by
+    on those three columns blends four books unless the expiry rides along.
+    """
+    meta = dict(META, end_date="2026-09-30T20:00:00Z", period="monthly")
+    r = _levels(REAL_BOOK, meta, "cyc", "2026-09-16T00:00:00+00:00")
+    assert r and all(x["end_date"] == "2026-09-30T20:00:00Z" for x in r)
+    assert all(x["period"] == "monthly" for x in r)

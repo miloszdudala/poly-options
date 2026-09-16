@@ -42,11 +42,36 @@ raw:
 kalshi:
   base: https://api.elections.kalshi.com/trade-api/v2
   orderbook_depth: 100
-  # Kalshi is the secondary track and is the slowest part of a snapshot (~140s
-  # for ~3.5k single-book requests). 15 = every tick; 60 = hourly.
+  # 15 = every tick; 60 = hourly. Hourly on purpose: the Kalshi series we track
+  # are index digitals with distant (largely year-end) expiries, so they simply
+  # do not move fast enough to be worth a 15-minute sample. book_filter brought
+  # the cost down to 2,201 requests / ~88 s, so 15 is affordable if the tracked
+  # series ever shift to near-dated contracts - it is a cadence choice now, not
+  # a budget one. Hourly books are ~2.6 GB/yr, every-tick ~6.5 GB/yr.
   interval_minutes: 60
-  # Kalshi exposes one book per request; fetch them concurrently.
+  # Kalshi exposes one book per request; fetch them concurrently. MEASURED
+  # 2026-09-16: throughput is flat at ~25 req/s at 8, 16 and 24 workers (24.2,
+  # 23.9, 27.1 req/s over two passes each) - the cap is server side, not ours,
+  # so more threads buy nothing and just lean harder on a public API. The only
+  # lever that moves the clock is sending fewer requests: see book_filter.
+  # The HTTP connection pool is sized from this number, so it stays safe to
+  # raise if Kalshi ever lifts the cap.
   book_workers: 8
+
+  # Deep books are only worth a request where something could actually trade.
+  # Measured 2026-09-16: of 3,519 open markets, 268 had ever traded and ~1,000
+  # were quoted more than 20c wide with zero open interest - those are ladder
+  # fillers, not markets. Top of book for EVERY market is still stored, because
+  # GET /markets already returns yes_bid/yes_ask and their sizes in ~10 paged
+  # requests; this filter only decides who additionally gets a depth request.
+  book_filter:
+    enabled: true
+    max_spread: 0.20       # quoted wider than this and never traded -> skip
+    # Series that always get full depth regardless of the filter, because they
+    # are the tight ones we actually care about pricing.
+    always_series: [KXINXY, KXINXDIRY, KXNASDAQ100Y, KXNDQDIRY, KXINXPOS,
+                    KXNASDAQ100POS, KXINXMAXY, KXINXMINY, KXNASDAQ100MAXY,
+                    KXNASDAQ100MINY, KXSP500WHEN]
   # Which underlying each series is written on, so its strikes can drive the
   # option strike filter for SPX / NDX (neither has a Polymarket market).
   series_underlying:
@@ -98,4 +123,11 @@ schedule:
   regular_open: "09:30"
   regular_close: "16:00"
   intraday_interval_minutes: 15
+  # Collect ONLY while the NYSE regular session is open. Prediction markets do
+  # keep trading overnight and at weekends, but the whole point of the dataset
+  # is aligning a book against an option chain, and the options are not quoted
+  # then - an off-hours book row has nothing to be compared with. Set true to
+  # resume hourly off-hours snapshots (they cost ~2 GB/yr and were the reason
+  # the machine had to stay awake around the clock).
+  collect_offhours: false
   offhours_interval_minutes: 60

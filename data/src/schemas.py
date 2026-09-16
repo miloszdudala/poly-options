@@ -43,6 +43,7 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("book_timestamp_utc", S), ("book_hash", S), ("token_id", S),
         ("condition_id", S), ("market_id", S), ("event_slug", S), ("ticker", S),
         ("contract_type", S), ("strike", F), ("barrier", F),
+        ("end_date", S), ("period", S),
         ("outcome", S), ("outcome_index", I),
         ("tick_size", F), ("min_order_size", F), ("neg_risk", B),
         ("book_last_trade_price", F),

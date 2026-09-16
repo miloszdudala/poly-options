@@ -144,27 +144,35 @@ def is_regular_hours(when: dt.datetime | None = None) -> bool:
 def should_run_snapshot(when: dt.datetime | None = None) -> tuple[bool, str]:
     """Cadence guard for the snapshot job.
 
-    launchd fires every 15 minutes around the clock; the spec wants 15-minute
-    snapshots during the NYSE regular session and hourly ones outside it, so the
-    off-hours ticks that are not on the hour are skipped here rather than by
-    maintaining several launchd entries that would need re-tuning at every DST
-    change.
+    launchd fires every 15 minutes around the clock; the cadence is decided here
+    rather than by maintaining several launchd entries that would need re-tuning
+    at every DST change.
+
+    By default nothing is collected outside the NYSE regular session. The books
+    do move overnight and at weekends, but there is no option chain quoted then
+    to compare them against, which is the only reason this dataset exists. It
+    also means the machine only has to be awake during the session.
     """
     when = (when or now_utc()).astimezone(UTC)
     if is_regular_hours(when):
         return True, "regular hours"
-    interval = markets_cfg()["schedule"]["intraday_interval_minutes"]
-    if when.astimezone(market_tz()).minute < interval:
+    cfg = markets_cfg()["schedule"]
+    if not cfg.get("collect_offhours", False):
+        return False, "outside the NYSE session"
+    if when.astimezone(market_tz()).minute < cfg["intraday_interval_minutes"]:
         return True, "off-hours hourly tick"
     return False, "off-hours, not the hourly tick"
 
 
 def should_run_kalshi(when: dt.datetime | None = None) -> tuple[bool, str]:
-    """Cadence guard for Kalshi, which the project treats as a secondary track.
+    """Cadence guard for Kalshi.
 
-    Kalshi only exposes one order book per request, so all ~3.5k markets cost
-    ~140 s - most of a snapshot's runtime. Its own interval is configurable so it
-    can be thinned without touching the Polymarket cadence.
+    Kalshi only exposes one order book per request, so fetching depth for all
+    ~3.5k open markets cost ~140 s - most of a snapshot's runtime, which is why
+    this guard exists at all. Now that depth is only requested for markets that
+    could actually be traded (kalshi.book_filter), the interval is back to every
+    tick; it stays configurable so Kalshi can be thinned again without touching
+    the Polymarket cadence.
     """
     when = (when or now_utc()).astimezone(UTC)
     interval = markets_cfg()["kalshi"].get("interval_minutes", 15)
@@ -194,6 +202,16 @@ class Http:
         self.backoff_max = cfg["backoff_max_seconds"]
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": cfg["user_agent"]})
+        # urllib3 defaults to 10 pooled connections per host. The Kalshi book
+        # sweep runs more threads than that, and once the pool is full urllib3
+        # discards the connection after each response - so every request past
+        # the tenth pays a fresh TCP + TLS handshake. Size the pool to the
+        # widest thread pool we run so keep-alive actually holds.
+        pool = max(10, 2 * int(markets_cfg()["kalshi"].get("book_workers", 8)))
+        adapter = requests.adapters.HTTPAdapter(pool_connections=pool,
+                                                pool_maxsize=pool)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         self.log = get_logger("http")
         # Shared list so a run can report every failed request at the end.
         self.failures = failures if failures is not None else []
@@ -267,9 +285,11 @@ def parallel_map(func, items: list, workers: int = 8) -> list:
     """Run func over items with a small thread pool, preserving input order.
 
     Used where a venue only offers per-item endpoints (Kalshi order books) and a
-    sequential loop would not fit inside the 15-minute cadence. Each worker gets
-    its own requests.Session via the Http instance passed in by the caller;
-    exceptions are returned in place rather than killing the pool.
+    sequential loop would not fit inside the 15-minute cadence. Workers SHARE the
+    caller's Http, and so its one requests.Session: that is deliberate, because a
+    shared session is what lets connections be reused across threads, but it is
+    why Http sizes its connection pool from book_workers. Exceptions are returned
+    in place rather than killing the pool.
     """
     from concurrent.futures import ThreadPoolExecutor
 

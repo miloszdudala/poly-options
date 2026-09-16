@@ -9,6 +9,7 @@ both do), which would break the collectors if it sat next to them.
 from __future__ import annotations
 
 import argparse
+import pathlib
 import json
 import os
 import sys
@@ -58,10 +59,35 @@ def latest_cycle(con) -> str | None:
     return None
 
 
+def heartbeat() -> None:
+    """When the collector last fired, and whether it did anything.
+
+    launchd cannot run while the Mac is asleep, so a stale timestamp here means
+    the machine slept through the session - which looks identical to a venue
+    outage if you only count rows.
+    """
+    import datetime as dt
+    import json
+
+    path = pathlib.Path(__file__).resolve().parent / "store" / "meta" / "last_tick.json"
+    if not path.exists():
+        print("\nlast tick:  never - is the launchd job installed?")
+        return
+    tick = json.loads(path.read_text())
+    when = dt.datetime.fromisoformat(tick["at_utc"])
+    age = (dt.datetime.now(dt.timezone.utc) - when).total_seconds() / 60
+    did = "collected" if tick.get("ran") else f"skipped ({tick.get('reason')})"
+    warn = "   <-- STALE, the machine was probably asleep" if age > 20 else ""
+    print(f"\nlast tick:  {when.astimezone():%Y-%m-%d %H:%M %Z}  "
+          f"({age:.0f} min ago)  {did}{warn}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cycle", help="cycle id (default: most recent)")
     args = parser.parse_args()
+
+    heartbeat()
 
     con = duckdb.connect()
     cycle = args.cycle or latest_cycle(con)

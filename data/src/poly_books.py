@@ -29,6 +29,12 @@ def _levels(book: dict, token_meta: dict, cycle_id: str, fetched_at: str) -> lis
         "contract_type": token_meta.get("contract_type"),
         "strike": token_meta.get("strike"),
         "barrier": token_meta.get("barrier"),
+        # Carried onto every level row on purpose. Without it (ticker, strike,
+        # contract_type) is NOT unique - MSFT close_above 510 exists in four
+        # different months at once - so any group-by on the obvious keys
+        # silently blends books from different expiries into one.
+        "end_date": token_meta.get("end_date"),
+        "period": token_meta.get("period"),
         "outcome": token_meta.get("outcome"),
         "outcome_index": token_meta.get("outcome_index"),
         "tick_size": book.get("tick_size"),
@@ -89,6 +95,8 @@ def collect_books(http: Http, markets: list[dict], cycle_id: str) -> dict:
                 "contract_type": m.get("contract_type"),
                 "strike": m.get("strike"),
                 "barrier": m.get("barrier"),
+                "end_date": m.get("end_date"),
+                "period": m.get("period"),
                 "outcome": m.get(f"outcome_{idx}"),
                 "outcome_index": idx,
             }
