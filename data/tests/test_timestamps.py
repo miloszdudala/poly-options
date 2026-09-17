@@ -129,3 +129,21 @@ def test_cycle_id_is_sortable_and_unique():
     assert early < late
     assert new_cycle_id() != new_cycle_id()
     assert early.startswith("20260916T093000Z-")
+
+
+def test_cboe_payload_and_trade_timestamps_use_different_zones():
+    """Verified live 2026-09-17: the payload clock is UTC, trade times are ET.
+
+    Assuming Eastern for both put source_quote_time_utc four hours ahead of the
+    fetch that produced it, so every option quote looked like it came from the
+    future and nothing that depends on quote age could work.
+    """
+    from util import market_tz, parse_iso
+
+    payload_clock = parse_iso("2026-09-17 02:39:22")                       # UTC
+    trade_clock = parse_iso("2026-09-16T15:55:00", assume_tz=market_tz())  # ET
+
+    assert payload_clock.isoformat() == "2026-09-17T02:39:22+00:00"
+    assert trade_clock.isoformat() == "2026-09-16T19:55:00+00:00"
+    # The payload clock must not land ahead of a fetch made moments later.
+    assert payload_clock < parse_iso("2026-09-17 02:40:00")

@@ -85,8 +85,14 @@ def fetch_cboe(http: Http, und: Underlying, cycle_id: str,
         write_raw("cboe", und.symbol, payload, cycle_id)
     fetched_at = utc_iso()
     data = payload.get("data") or {}
-    # Cboe publishes a naive timestamp in US Eastern.
-    src_ts = parse_iso(payload.get("timestamp"), assume_tz=market_tz())
+    # The two naive timestamps in this payload are in DIFFERENT zones, verified
+    # against the wall clock 2026-09-17: the top-level `timestamp` is UTC (it
+    # read 02:39:22 when UTC was 02:39:46), while per-contract `last_trade_time`
+    # is US Eastern (15:55:00, the last print before the 16:00 ET close).
+    # Assuming Eastern for both pushed source_quote_time_utc four hours into the
+    # future - i.e. later than our own fetch time - which silently breaks any
+    # staleness check or delta-adjustment that leans on it.
+    src_ts = parse_iso(payload.get("timestamp"))
     src_iso = src_ts.isoformat() if src_ts else None
 
     wanted = set(select_expiries([
