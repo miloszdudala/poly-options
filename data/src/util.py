@@ -194,7 +194,11 @@ class HttpError(Exception):
 class Http:
     """requests session with exponential backoff + jitter and failure logging."""
 
-    def __init__(self, failures: list | None = None):
+    def __init__(self, failures: list | None = None, deadline: float | None = None):
+        # deadline is a time.monotonic() stamp past which we stop trying. It is
+        # checked before every attempt and bounds every backoff sleep, so a run
+        # cannot be dragged past its budget by the retry ladder alone.
+        self.deadline = deadline
         cfg = markets_cfg()["http"]
         self.timeout = cfg["timeout_seconds"]
         self.max_retries = cfg["max_retries"]
@@ -230,6 +234,9 @@ class Http:
         kwargs.setdefault("timeout", self.timeout)
         last_err: str | None = None
         for attempt in range(1, self.max_retries + 1):
+            if self.past_deadline():
+                self._record_failure(venue, identifier, url, "run deadline exceeded")
+                return None
             try:
                 resp = self.session.request(method, url, **kwargs)
             except requests.RequestException as exc:
@@ -252,9 +259,15 @@ class Http:
                     return None
             if attempt < self.max_retries:
                 delay = min(self.backoff_base * 2 ** (attempt - 1), self.backoff_max)
-                time.sleep(delay * (0.5 + random.random()))  # full-ish jitter
+                delay *= 0.5 + random.random()  # full-ish jitter
+                if self.deadline is not None:
+                    delay = min(delay, max(0.0, self.deadline - time.monotonic()))
+                time.sleep(delay)
         self._record_failure(venue, identifier, url, last_err or "unknown")
         return None
+
+    def past_deadline(self) -> bool:
+        return self.deadline is not None and time.monotonic() >= self.deadline
 
     def get(self, url: str, **kw):
         return self.request("GET", url, **kw)

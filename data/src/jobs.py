@@ -12,7 +12,7 @@ import sys
 import time
 import traceback
 
-from config import ensure_dirs, underlyings
+from config import ensure_dirs, markets_cfg, underlyings
 from storage import read_meta, write_failures, write_meta, write_run_summary
 from util import (
     Http, get_logger, is_regular_hours, is_trading_day, new_cycle_id, now_utc,
@@ -25,14 +25,20 @@ log = get_logger("jobs")
 class Run:
     """Times a job and always writes a summary row, even on failure."""
 
-    def __init__(self, job: str):
+    def __init__(self, job: str, deadline_seconds: float | None = None):
         self.job = job
         self.cycle_id = new_cycle_id()
         self.started = now_utc()
         self.counts: dict = {}
-        self.http = Http()
+        # Only the snapshot is deadlined. The daily job legitimately runs ~17
+        # minutes and has no next tick to protect.
+        self.deadline = (time.monotonic() + deadline_seconds) if deadline_seconds else None
+        self.http = Http(deadline=self.deadline)
         self.status = "ok"
         self.notes: list[str] = []
+
+    def out_of_time(self) -> bool:
+        return self.deadline is not None and time.monotonic() >= self.deadline
 
     def note(self, text: str) -> None:
         log.info(text)
@@ -91,10 +97,22 @@ def job_snapshot(run: Run) -> None:
     book_stats, _books = collect_books(run.http, markets, run.cycle_id)
     run.counts.update(book_stats)
 
-    if should_run_kalshi():
+    # Each phase writes its own table before the next starts, so abandoning the
+    # rest of the run keeps everything already collected.
+    if run.out_of_time():
+        run.note("deadline hit after polymarket books: kalshi and options skipped")
+        run.status = "truncated"
+        return
+
+    if should_run_kalshi()[0]:
         run.counts.update(collect(run.http, run.cycle_id, with_books=True))
     else:
         run.note("kalshi cadence: skipped this tick")
+
+    if run.out_of_time():
+        run.note("deadline hit after kalshi: options skipped")
+        run.status = "truncated"
+        return
 
     if is_regular_hours():
         run.counts.update(collect_options(run.http, underlyings(with_options_only=True),
@@ -143,7 +161,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     ensure_dirs()
-    run = Run(args.job)
+    deadline = None
+    if args.job == "snapshot":
+        deadline = markets_cfg()["schedule"].get("snapshot_deadline_seconds") or None
+    run = Run(args.job, deadline_seconds=deadline)
 
     if args.job == "daily" and not is_trading_day() and not args.force:
         run.note("not a US trading day: skipping")

@@ -131,3 +131,11 @@ schedule:
   # the machine had to stay awake around the clock).
   collect_offhours: false
   offhours_interval_minutes: 60
+  # Hard stop for one snapshot, seconds. A brief connectivity drop once turned a
+  # ~150 s run into 1,569 s: the retry ladder (5 attempts backing off to 60 s)
+  # ran per-token across a failed 50-token batch. The cycle itself was fine, but
+  # it delayed the NEXT snapshot by 41 minutes - the outage cost two cycles
+  # rather than part of one. Past this, remaining work is abandoned and whatever
+  # was collected is written. 0 disables. The daily job is never deadlined; it
+  # legitimately takes ~17 minutes.
+  snapshot_deadline_seconds: 600

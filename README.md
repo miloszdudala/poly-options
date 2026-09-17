@@ -58,9 +58,15 @@ snapshots.
 
 ### The machine has to be awake for that window
 
-launchd does not run a job while the Mac is asleep. It fires a missed
-`StartInterval` job once on wake, so a sleeping laptop loses the session rather
-than backfilling it.
+launchd does not run a job while the Mac is asleep, and does not backfill a
+missed session on wake - a sleeping laptop loses it.
+
+Snapshots fire on the quarter hour (`StartCalendarInterval`), not on an
+interval. `StartInterval` does not start counting until the job exits, so a
+~150 s run pushed every tick ~150 s later: measured gaps of 17.0-18.0 min
+against a nominal 15, costing 5 of 26 snapshots per session and leaving cycles
+at drifting clock times. Calendar entries are absolute, so a slow run delays
+only itself.
 
 | | local (UTC+8) |
 |---|---|
@@ -236,6 +242,10 @@ A full cycle takes about 3 minutes: Polymarket books 13 s, Kalshi 142 s, options
 
 Three settings move these numbers:
 
+- `schedule.snapshot_deadline_seconds` - a snapshot abandons its remaining
+  phases past this and writes what it has (`status=truncated`). A connectivity
+  drop once stretched a run to 1,569 s through the retry ladder and delayed the
+  next tick by 41 minutes; the outage cost two cycles instead of part of one.
 - `kalshi.book_filter` (markets.yaml) - depth is requested only for markets that
   have traded, are quoted within 20¢, or belong to a series we always price.
   Measured: 3,519 open markets -> 2,201 depth requests, ~142 s -> ~88 s. Top of
