@@ -77,7 +77,19 @@ def heartbeat() -> None:
     when = dt.datetime.fromisoformat(tick["at_utc"])
     age = (dt.datetime.now(dt.timezone.utc) - when).total_seconds() / 60
     did = "collected" if tick.get("ran") else f"skipped ({tick.get('reason')})"
-    warn = "   <-- STALE, the machine was probably asleep" if age > 20 else ""
+
+    # A stale tick only means something while a session is running. Outside one
+    # the machine is *expected* to be asleep - warning then cries wolf every
+    # morning and teaches you to ignore the one line that matters.
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "src"))
+    from util import is_regular_hours
+
+    if age > 20 and is_regular_hours():
+        warn = "   <-- STALE DURING A SESSION, the machine is asleep"
+    elif age > 20:
+        warn = "   (no session running, so nothing is due)"
+    else:
+        warn = ""
     print(f"\nlast tick:  {when.astimezone():%Y-%m-%d %H:%M %Z}  "
           f"({age:.0f} min ago)  {did}{warn}")
 
