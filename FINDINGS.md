@@ -11,18 +11,34 @@ Last updated: 2026-09-17. All numbers below come from the snapshot of
 
 ## 1. Objective
 
-Find prediction-market contracts priced away from the probability implied by
-listed stock options, buy the mispriced side **at the offer**, and hold to
-resolution.
+**Find prediction-market contracts that are mispriced, and make money from it.**
+That is the whole objective. Everything below is a working assumption about
+*how*, held because of evidence, not because it is part of the goal.
 
-Explicitly **not**:
-
-- market making or posting resting orders
-- selling back before expiry (no exits, so no round-trip cost)
-- arbitrage between prediction markets
+### Current working assumption: buy at the offer, hold to resolution
 
 The bet is: buy at 0.35, get paid 1.00 or 0.00. The only execution cost is the
-price you pay plus the fee, once.
+price paid plus the fee, once.
+
+This is a **conclusion, not a rule**. It follows from one measurement: exiting is
+expensive. Buying $100 and selling it straight back costs ~48% on close_above and
+~18-42% on hit markets (section 3.3), so a strategy that needs to sell gives back
+more than the edge. Holding to resolution is simply the only approach we can
+currently see that clears its own costs.
+
+A different model may well find something better. Nothing here forecloses it.
+
+### Status of the alternatives — these differ, and the difference matters
+
+| approach | status |
+|---|---|
+| **Early exit / stop-loss** | *Ruled out on current evidence.* Exit cost (18-48% round trip) dwarfs any plausible stop. Would change if spreads tighten. |
+| **Arbitrage inside Polymarket** | *Tested and absent.* 7 violations in 39,563 comparisons, ~$1 total (section 3.4). Genuinely not there. |
+| **Market making / resting orders** | *Untested, not refuted.* Fees are taker-only with a 25% maker rebate, so the economics point this way. We chose not to collect the trade tape, so we cannot yet tell whether a resting order would fill, or only fill when we are wrong. Reopening this means collecting CLOB trades. |
+| **Something else** | Open. |
+
+Do not read "hold to resolution" anywhere below as a constraint on what the
+project may do. It is the current best guess at the only sensible approach.
 
 ---
 
@@ -61,8 +77,9 @@ To ask whether the market is *displaced*, compare **mid vs fair**.
 To ask whether a *bet* is good, compare **fair vs the price you pay**.
 Never average `bid - fair` and conclude anything from its sign.
 
-Related: the spread is a real cost but you pay **half of it, once**. Round-trip
-cost is irrelevant — we never sell.
+Related: the spread is a real cost but you pay **half of it, once**, under the
+current hold-to-resolution assumption. Round-trip cost only becomes relevant
+again if a model proposes selling before expiry — see section 1.
 
 ---
 
