@@ -4,7 +4,8 @@ Read-only data collection for comparing Polymarket (and Kalshi) contracts on US
 stock prices with probabilities implied by listed options.
 
 **This repository collects data only.** No accounts, no API keys, no orders.
-Modelling and signal logic belong in `model/`, which is deliberately empty.
+Modelling and signal logic belong in `model/`: `model/MODELS.md` is the
+simulation design, `model/OPUS_PROMPTS.md` the implementation passes.
 
 Because liquidity is thin, the **full order book** (every level, both sides, both
 outcome tokens) is stored at every snapshot. Mid, last trade and best bid/ask are
@@ -45,8 +46,9 @@ Cadence:
 
 | when | what |
 |---|---|
-| every 15 min, 09:30–16:00 ET on NYSE sessions | Polymarket books, option chains, spot |
-| hourly within the session | Kalshi books (distant expiries; they do not move faster) |
+| every 15 min, 09:30–16:00 ET on NYSE sessions | Polymarket books, option chains, spot; every tracked event re-read by slug (new barriers, outcomes) |
+| once per session, after the first tick's books and options | full Polymarket discovery walk (`discovery.intraday_interval_minutes`); resumes across ticks if the budget runs out |
+| ~hourly within the session | Kalshi books (distant expiries; they do not move faster) |
 | outside the session | **nothing** |
 | 17:30 ET, trading days | discovery, metadata, rates, dividends, earnings, bars, price history |
 
@@ -61,6 +63,33 @@ snapshots.
 launchd does not run a job while the Mac is asleep, and does not backfill a
 missed session on wake - a sleeping laptop loses it.
 
+A closed lid is worse than that, because it does not lose the session cleanly.
+With `powernap 1` and `tcpkeepalive 1` (both on here) macOS holds the clamshell
+in Deep Idle and dark-wakes for 2-45 s every 15-35 min. launchd fires the
+snapshot on those wakes, so a run starts, gets a few seconds of CPU and network,
+is frozen mid-flight, and resumes on the next wake.
+
+MEASURED, session of 2026-09-17 (lid shut ~22:30 local, first full wake 09:54
+the next morning): 4 snapshots completed out of ~26 scheduled, each taking 49,
+104, 126 and 57 minutes of wall clock, and Kalshi collected nothing at all.
+The tick clock is the dark-wake clock, not the quarter hour - ticks landed at
+ET minutes 18, 31, 38 and 45. Three bugs only ever fired under these
+conditions, and are fixed:
+
+- the run deadline was built on `time.monotonic()`, which does not advance
+  across sleep (31.3 of 61.4 hours since boot were missing from it), so a 600 s
+  budget bought two hours of wall clock and the 15:45 ET tick was still writing
+  books at 16:41 ET, after the close. It now uses `util.steady_seconds()`.
+- the Kalshi guard tested `minute % 60 < 15`, which assumes ticks land on the
+  15-minute grid. It now measures elapsed time since the last collection.
+- the Parquet partition came from the write clock, so a run crossing UTC
+  midnight split one `cycle_id` across two `date=` partitions. It now comes
+  from the cycle.
+
+The fixes make a closed-lid session fail honestly - runs truncate at their
+deadline and say so in `runs.status` - rather than backfilling mislabelled
+books. They do not recover the data. Only staying awake does that.
+
 Snapshots fire on the quarter hour (`StartCalendarInterval`), not on an
 interval. `StartInterval` does not start counting until the job exits, so a
 ~150 s run pushed every tick ~150 s later: measured gaps of 17.0-18.0 min
@@ -68,12 +97,24 @@ against a nominal 15, costing 5 of 26 snapshots per session and leaving cycles
 at drifting clock times. Calendar entries are absolute, so a slow run delays
 only itself.
 
-| | local (UTC+8) |
+| | local (UTC+7, since 2026-09-21) |
 |---|---|
-| session | 21:30 → 04:00 |
-| daily job | 05:30 |
-| **awake window** | **21:30 → 05:30** |
-| after the US falls back, 1 Nov 2026 | 22:30 → 06:30 |
+| session | 20:30 → 03:00 |
+| daily job | 04:30 |
+| report job | 05:00 |
+| **awake window** | **20:30 → 05:00** |
+| after the US falls back, 1 Nov 2026 | 21:30 → 06:00 |
+
+Re-run `./scheduling/install.sh` after changing timezone as well as after a US
+DST change: the plists hold local wall-clock times.
+
+The first tick of each session used to start with a full discovery walk. At
+the US open Gamma serves it at ~5 s a page (~0.4 s at 04:30 local), so on
+2026-09-21 and 09-22 the walk ate the whole 600 s budget and the 13:30Z books
+were lost. The walk now runs after books, Kalshi and options, in whatever
+budget is left, and resumes from its cursor on the next tick
+(`meta/discovery_resume.json`); `last_discovery` is stamped only when it
+completes.
 
 Idle sleep is already off (`pmset -g custom` shows `sleep 0` on both AC and
 battery), so in practice: **leave the lid open and keep it plugged in.** Closing
@@ -153,14 +194,33 @@ in `poly_markets.fee_schedule`. With exponent 1 the taker fee is
 premium**, and makers are rebated 25% instead. Any edge measured against a mid
 price is measuring something untradeable: you pay the spread *and* the fee.
 
-### Option quotes are ~15 minutes stale
+### Option quotes are 15 minutes stale, and the stored quote time is not the quote time
 
-Free Cboe quotes lag, so an option-implied probability compared against a live
-prediction-market book mostly measures underlying drift. `option_quotes` keeps
-`source_quote_time_utc` per contract and `underlying_quotes` keeps spot with its
-own timestamp, which is what a model needs to delta-adjust the option forward to
-the book's timestamp. Doing that correction is a **requirement in `model/`**, not
-an optional refinement - skip it and your "edge" is a clock artifact.
+MEASURED 2026-09-16 15:53Z fetch: the latest option print in the chain was
+15:38Z and the Cboe spot matched the 15:35Z 5-minute bar. The payload's
+top-level `timestamp` (stored as `source_quote_time_utc`) is the file's
+generation time, ~equal to our fetch time, **not** the quote time. Use
+`max(last_trade_time_utc)` per symbol per cycle as the quote time, and the
+5-minute bar containing `book_timestamp_utc` as the spot at the book. An
+option-implied probability compared against a live book without that
+delta-adjustment mostly measures 15 minutes of underlying drift; doing the
+correction is a **requirement in `model/`**, not an optional refinement.
+
+Rows written before commit dadb128 had `source_quote_time_utc` four hours
+late (the file clock parsed as Eastern); `data/migrations/2026-09-18_*.py`
+repaired them in place.
+
+### Markets are born at 12:40 ET and die when they touch
+
+Polymarket lists a fresh batch of hit barriers near spot around 12:40 ET every
+session, and a hit market resolves the moment its barrier prints - a quarter
+of touched markets close within four hours of listing. `poly_markets` carries
+`created_at`, `closed_time` (the touch time), `outcome_prices` and `result`;
+`resolutions` carries `result` and `settled_at_utc`. Every known event is
+re-read by slug on every tick (`data/src/poly_events.py`) so new barriers get
+books the same session and events that close (weekly ladders on Friday)
+still have their NO outcomes recorded. Rows from before 2026-09-18 were
+backfilled from the raw archive.
 
 ## Query
 
@@ -192,6 +252,10 @@ queries that remember to say so.
 `poly_unparsed`, `kalshi_markets`, `kalshi_books`, `option_quotes`,
 `underlying_quotes`, `underlying_bars`, `rates`, `dividends`, `earnings`,
 `resolutions`, `runs`, `failures`.
+
+`poly_price_history` fetches a token's whole hourly history the first time it
+sees it (`interval=max`) and one day after that; before 2026-09-18 it only
+ever fetched one day, so markets that resolved earlier have no history.
 
 Every table carries `fetched_at_utc` and `cycle_id`. Source timestamps live in
 their own columns (`book_timestamp_utc`, `source_quote_time_utc`,
@@ -254,7 +318,10 @@ Three settings move these numbers:
 - `kalshi.interval_minutes` (markets.yaml) - `15` (every tick) or `60` (hourly).
   Hourly by choice, not by budget: the tracked Kalshi series are index digitals
   with distant expiries that do not move fast enough to repay a 15-minute
-  sample. Every-tick would cost ~6.5 GB/yr against ~2.6 GB/yr hourly.
+  sample. Every-tick would cost ~6.5 GB/yr against ~2.6 GB/yr hourly. The
+  interval is measured from the last collection recorded in
+  `store/meta/last_kalshi.json`, so it holds when ticks drift off the quarter
+  hour; delete that file to force the next tick to collect.
 - `kalshi.book_workers` - **raising this does nothing.** Measured 2026-09-16:
   25.0 / 24.7 / 27.1 req/s at 8 / 16 / 24 workers. The ~25 req/s ceiling is
   Kalshi's, not ours, so the only way to spend less time is to send fewer

@@ -75,7 +75,6 @@ def collect_books(http: Http, markets: list[dict], cycle_id: str) -> dict:
     cfg = markets_cfg()["polymarket"]
     base = cfg["clob_base"]
     batch_size = cfg["books_batch_size"]
-    fetched_at = utc_iso()
 
     # token_id -> descriptive metadata, so flattened rows are self-describing.
     token_meta: dict[str, dict] = {}
@@ -109,6 +108,12 @@ def collect_books(http: Http, markets: list[dict], cycle_id: str) -> dict:
     books_by_token: dict[str, dict] = {}
 
     for batch in chunked(token_ids, batch_size):
+        # Stamped per batch, not once per run. A single stamp claimed that
+        # every book in the cycle was read at the same instant; on 2026-09-17
+        # the books of one "15-minute" cycle were actually gathered over 126
+        # minutes, so the column understated the spread by two hours and the
+        # smear was invisible to anything reading the table.
+        fetched_at = utc_iso()
         payload = http.post(
             f"{base}/books",
             venue="polymarket",
@@ -162,13 +167,23 @@ def collect_books(http: Http, markets: list[dict], cycle_id: str) -> dict:
 def collect_price_history(http: Http, markets: list[dict], cycle_id: str,
                           interval: str = "1d", fidelity: int = 60,
                           workers: int = 8) -> int:
-    """Daily price history per token - for backfilling resolved markets.
+    """Hourly price history per token.
 
-    One request per token, so fetched concurrently: ~2.5k sequential round trips
+    The first time a token is seen its WHOLE history is fetched
+    (`interval=max`, hourly points back to listing), after that only the last
+    day. `interval=1d` alone never backfilled anything: a market listed in
+    August had one day of prices in the table and nothing before, which made
+    the price-versus-outcome calibration impossible for every market that
+    resolved before collection started.
+
+    One request per token, so fetched concurrently: ~3.6k sequential round trips
     would take longer than the daily window comfortably allows.
     """
+    from storage import read_meta, write_meta
+
     base = markets_cfg()["polymarket"]["clob_base"]
     fetched_at = utc_iso()
+    backfilled: set[str] = set((read_meta("price_history_backfilled") or {}).get("tokens", []))
 
     jobs = []
     for m in markets:
@@ -179,12 +194,13 @@ def collect_price_history(http: Http, markets: list[dict], cycle_id: str,
 
     def fetch(job):
         tid, idx, m = job
+        span = interval if tid in backfilled else "max"
         payload = http.get(f"{base}/prices-history", venue="polymarket",
                            identifier=f"hist_{tid}",
-                           params={"market": tid, "interval": interval,
+                           params={"market": tid, "interval": span,
                                    "fidelity": fidelity})
-        if not payload:
-            return []
+        if payload is None:
+            return None, []
         out = []
         for point in payload.get("history") or []:
             ts = parse_epoch(point.get("t"))
@@ -197,41 +213,69 @@ def collect_price_history(http: Http, markets: list[dict], cycle_id: str,
                 "outcome_index": idx,
                 "point_time_utc": ts.isoformat() if ts else None,
                 "price": point.get("p"),
-                "interval": interval,
+                "interval": span,
                 "fidelity": fidelity,
             })
-        return out
+        return tid, out
 
     rows: list[dict] = []
     for got in parallel_map(fetch, jobs, workers=workers):
-        if got:
-            rows += got
+        if not got:
+            continue
+        tid, points = got
+        if tid:
+            backfilled.add(tid)
+        rows += points
     if rows:
         write_table("poly_price_history", rows)
+    write_meta("price_history_backfilled", {"tokens": sorted(backfilled)})
     return len(rows)
 
 
 def collect_resolutions(http: Http, markets: list[dict], cycle_id: str) -> int:
-    """Record outcomes for markets that have resolved."""
+    """Record outcomes for markets that have closed.
+
+    `result` is the winning label ("Yes"/"No") once UMA has resolved, else
+    None; `settled_at_utc` is Gamma's closedTime, which for a hit market is
+    the moment the barrier printed. The table is append-only and rewritten in
+    full on every daily run, so read the latest row per market_id.
+    """
     fetched_at = utc_iso()
-    rows = []
-    for m in markets:
-        if not m.get("closed"):
-            continue
-        rows.append({
-            "cycle_id": cycle_id,
-            "fetched_at_utc": fetched_at,
-            "venue": "polymarket",
-            "market_id": m.get("market_id"),
-            "event_slug": m.get("event_slug"),
-            "ticker": m.get("ticker"),
-            "contract_type": m.get("contract_type"),
-            "strike": m.get("strike"),
-            "barrier": m.get("barrier"),
-            "question": m.get("question"),
-            "uma_status": m.get("umaResolutionStatus"),
-            "end_date": m.get("end_date"),
-        })
+    rows = [resolution_row(m, cycle_id, fetched_at) for m in markets if m.get("closed")]
     if rows:
         write_table("resolutions", rows)
     return len(rows)
+
+
+def resolution_row(m: dict, cycle_id: str, fetched_at: str | None = None) -> dict:
+    return {
+        "cycle_id": cycle_id,
+        "fetched_at_utc": fetched_at or utc_iso(),
+        "venue": "polymarket",
+        "market_id": m.get("market_id"),
+        "event_slug": m.get("event_slug"),
+        "ticker": m.get("ticker"),
+        "contract_type": m.get("contract_type"),
+        "strike": m.get("strike"),
+        "barrier": m.get("barrier"),
+        "question": m.get("question"),
+        "uma_status": m.get("umaResolutionStatus"),
+        "end_date": m.get("end_date"),
+        "result": m.get("result"),
+        "settled_at_utc": _closed_time_iso(m.get("closed_time")),
+        "outcome_prices": m.get("outcome_prices"),
+        "created_at": m.get("created_at"),
+    }
+
+
+def _closed_time_iso(value) -> str | None:
+    """Gamma's closedTime looks like '2026-09-17 17:26:54+00' - normalise it."""
+    from util import parse_iso
+
+    if not value:
+        return None
+    text = str(value).strip()
+    if text.endswith("+00"):
+        text = text[:-3] + "+00:00"
+    parsed = parse_iso(text)
+    return parsed.isoformat() if parsed else text

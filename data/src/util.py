@@ -58,6 +58,35 @@ def today_utc() -> str:
     return now_utc().strftime("%Y-%m-%d")
 
 
+def steady_seconds() -> float:
+    """Monotonic seconds that keep counting while the machine is asleep.
+
+    `time.monotonic()` is mach_absolute_time() on macOS and CLOCK_MONOTONIC on
+    Linux; neither advances across a system suspend. Every deadline in this
+    collector is there to protect the *next* tick, which is a wall-clock event,
+    so budgeting in awake-seconds is simply the wrong unit on a laptop.
+
+    MEASURED 2026-09-18 on the collecting Mac: 31.3 of the 61.4 hours since
+    boot were missing from time.monotonic(). The cost was not theoretical - the
+    four snapshots of the 2026-09-17 session ran 49, 104, 126 and 57 minutes of
+    wall clock against a 600 s deadline without ever tripping it, because a
+    closed clamshell only dark-wakes for a few seconds at a time. The 15:45 ET
+    tick was still writing books at 16:41 ET, after the close.
+
+    CLOCK_BOOTTIME (Linux) and CLOCK_MONOTONIC (Darwin) both include suspend.
+    Unlike time.time() neither can be stepped backwards by NTP.
+    """
+    for name in ("CLOCK_BOOTTIME", "CLOCK_MONOTONIC"):
+        clock = getattr(time, name, None)
+        if clock is None:
+            continue
+        try:
+            return time.clock_gettime(clock)
+        except (OSError, ValueError):  # pragma: no cover - platform dependent
+            continue
+    return time.monotonic()  # pragma: no cover - non-POSIX fallback
+
+
 def market_tz() -> ZoneInfo:
     """US market timezone from the tz database - never a hard-coded offset."""
     return ZoneInfo(markets_cfg()["schedule"]["market_tz"])
@@ -164,7 +193,8 @@ def should_run_snapshot(when: dt.datetime | None = None) -> tuple[bool, str]:
     return False, "off-hours, not the hourly tick"
 
 
-def should_run_kalshi(when: dt.datetime | None = None) -> tuple[bool, str]:
+def should_run_kalshi(when: dt.datetime | None = None,
+                      last_run: dt.datetime | None = None) -> tuple[bool, str]:
     """Cadence guard for Kalshi.
 
     Kalshi only exposes one order book per request, so fetching depth for all
@@ -173,15 +203,30 @@ def should_run_kalshi(when: dt.datetime | None = None) -> tuple[bool, str]:
     could actually be traded (kalshi.book_filter), the interval is back to every
     tick; it stays configurable so Kalshi can be thinned again without touching
     the Polymarket cadence.
+
+    The interval is measured from the last collection, not from the minute of
+    the hour. The earlier `minute % interval < 15` test assumed ticks land on
+    the 15-minute grid, which is exactly what a laptop does not do: launchd
+    fires on the next dark wake, so the 2026-09-17 session ticked at ET minutes
+    18, 31, 38 and 41 and the hourly guard rejected all four. A whole session
+    of Kalshi books was lost with nothing in the log but "skipped this tick".
     """
     when = (when or now_utc()).astimezone(UTC)
     interval = markets_cfg()["kalshi"].get("interval_minutes", 15)
-    if interval <= 15:
+    tick = markets_cfg()["schedule"]["intraday_interval_minutes"]
+    if interval <= tick:
         return True, "every tick"
-    minute = when.astimezone(market_tz()).minute
-    if minute % interval < 15:
-        return True, f"on the {interval}-minute boundary"
-    return False, f"not a {interval}-minute boundary"
+    if last_run is None:
+        return True, "no previous kalshi collection"
+    elapsed = (when - last_run.astimezone(UTC)).total_seconds() / 60
+    if elapsed < 0:
+        return True, "last collection is in the future; clock moved"
+    # Fire when the next tick would overshoot the interval by more than it
+    # undershoots, so drifting ticks still average out at one per interval
+    # instead of skipping to the one after.
+    if elapsed >= interval - tick / 2:
+        return True, f"{elapsed:.0f} min since the last collection"
+    return False, f"only {elapsed:.0f} of {interval} min since the last collection"
 
 
 # ------------------------------------------------------------------ http layer
@@ -195,9 +240,10 @@ class Http:
     """requests session with exponential backoff + jitter and failure logging."""
 
     def __init__(self, failures: list | None = None, deadline: float | None = None):
-        # deadline is a time.monotonic() stamp past which we stop trying. It is
+        # deadline is a steady_seconds() stamp past which we stop trying. It is
         # checked before every attempt and bounds every backoff sleep, so a run
-        # cannot be dragged past its budget by the retry ladder alone.
+        # cannot be dragged past its budget by the retry ladder alone. It must
+        # be steady_seconds(), not time.monotonic(): see that function.
         self.deadline = deadline
         cfg = markets_cfg()["http"]
         self.timeout = cfg["timeout_seconds"]
@@ -261,13 +307,13 @@ class Http:
                 delay = min(self.backoff_base * 2 ** (attempt - 1), self.backoff_max)
                 delay *= 0.5 + random.random()  # full-ish jitter
                 if self.deadline is not None:
-                    delay = min(delay, max(0.0, self.deadline - time.monotonic()))
+                    delay = min(delay, max(0.0, self.deadline - steady_seconds()))
                 time.sleep(delay)
         self._record_failure(venue, identifier, url, last_err or "unknown")
         return None
 
     def past_deadline(self) -> bool:
-        return self.deadline is not None and time.monotonic() >= self.deadline
+        return self.deadline is not None and steady_seconds() >= self.deadline
 
     def get(self, url: str, **kw):
         return self.request("GET", url, **kw)

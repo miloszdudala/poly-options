@@ -8,6 +8,16 @@ polymarket:
   books_batch_size: 50
 
   discovery:
+    # Minutes between full walks of every open event (~210 requests, ~80 s off
+    # hours, ~950 s at the US open). The walk runs after a tick's books and
+    # options, and resumes on the next tick if the budget runs out.
+    # 720 means exactly one extra walk, starting on the first tick of the session: the
+    # daily 17:30 ET walk runs BEFORE Polymarket creates the next week's
+    # ladders (measured: Friday 22:00Z), so without it Monday's session would
+    # have no weekly books at all. Everything else - the ~12:40 ET batch of new
+    # barriers, touches, outcomes - is caught by the per-tick refresh of every
+    # known event, which costs 2 requests (100 ids each). 0 disables.
+    intraday_interval_minutes: 720
     # An event is kept only if its title contains a TICKER in parentheses AND one of these
     # patterns. Patterns are matched case-insensitively against the title.
     title_patterns:

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.polyoptions.report</string>
+
+    <!-- Price any unpriced session cycles, re-run every model, write
+         model/reports/daily_<date>.md. 18:00 America/New_York, half an hour
+         after the metadata refresh. Same convention as the daily job: launchd
+         calendar entries use LOCAL wall-clock time, so the hour below is
+         written in this machine's own timezone by install.sh, which converts
+         from 18:00 ET for today's DST state and re-converts when re-run.
+
+         This job does not wait for com.polyoptions.daily. That one has taken
+         over four hours on a backfill (measured 2026-09-17: 16,076 s), and the
+         report reads books the snapshot job has already stored, not the bars
+         the daily job is fetching. An overlap costs the report the newest
+         daily bars and nothing else. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/.venv/bin/python</string>
+        <string>__REPO__/model/daily.py</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>__REPORT_HOUR__</integer>
+        <key>Minute</key>
+        <integer>__REPORT_MINUTE__</integer>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__REPO__/data/logs/launchd-report.out</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/data/logs/launchd-report.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>

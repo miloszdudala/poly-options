@@ -38,6 +38,8 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("best_bid", F), ("best_ask", F), ("spread", F),
         ("event_tags", S), ("rules_text", S), ("resolution_source", S),
         ("umaResolutionStatus", S),
+        ("created_at", S), ("start_date", S), ("closed_time", S),
+        ("outcome_prices", S), ("result", S),
     ]),
     "poly_books": _schema([
         ("book_timestamp_utc", S), ("book_hash", S), ("token_id", S),
@@ -125,7 +127,9 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("venue", S), ("market_id", S), ("event_slug", S), ("ticker", S),
         ("contract_type", S), ("strike", F), ("barrier", F), ("question", S),
         ("uma_status", S), ("end_date", S), ("result", S), ("settled_at_utc", S),
+        ("outcome_prices", S), ("created_at", S),
     ]),
+
     "runs": _schema([
         ("job", S), ("started_at_utc", S), ("ended_at_utc", S),
         ("duration_seconds", F), ("status", S),

@@ -9,14 +9,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 import traceback
 
 from config import ensure_dirs, markets_cfg, underlyings
 from storage import read_meta, write_failures, write_meta, write_run_summary
 from util import (
     Http, get_logger, is_regular_hours, is_trading_day, new_cycle_id, now_utc,
-    should_run_kalshi, should_run_snapshot, utc_iso,
+    parse_iso, should_run_kalshi, should_run_snapshot, steady_seconds, utc_iso,
 )
 
 log = get_logger("jobs")
@@ -32,13 +31,15 @@ class Run:
         self.counts: dict = {}
         # Only the snapshot is deadlined. The daily job legitimately runs ~17
         # minutes and has no next tick to protect.
-        self.deadline = (time.monotonic() + deadline_seconds) if deadline_seconds else None
+        # steady_seconds(), not time.monotonic(): the deadline protects the
+        # next wall-clock tick, and time.monotonic() stops during system sleep.
+        self.deadline = (steady_seconds() + deadline_seconds) if deadline_seconds else None
         self.http = Http(deadline=self.deadline)
         self.status = "ok"
         self.notes: list[str] = []
 
     def out_of_time(self) -> bool:
-        return self.deadline is not None and time.monotonic() >= self.deadline
+        return self.deadline is not None and steady_seconds() >= self.deadline
 
     def note(self, text: str) -> None:
         log.info(text)
@@ -77,14 +78,19 @@ def _markets_for_books(run: Run) -> list[dict]:
     if cached and cached.get("markets"):
         return cached["markets"]
     run.note("no cached discovery, running discovery first")
-    return discover(run.http, run.cycle_id)
+    markets, _complete = discover(run.http, run.cycle_id)
+    return markets
 
 
 def job_discover(run: Run) -> None:
     from poly_discover import discover
 
-    markets = discover(run.http, run.cycle_id)
+    markets, complete = discover(run.http, run.cycle_id)
     run.counts["poly_markets"] = len(markets)
+    if complete:
+        write_meta("last_discovery", {"at_utc": utc_iso(run.started), "cycle_id": run.cycle_id})
+    else:
+        run.status = "truncated"
 
 
 def job_snapshot(run: Run) -> None:
@@ -93,7 +99,18 @@ def job_snapshot(run: Run) -> None:
     from options import collect_options
     from poly_books import collect_books
 
+    from poly_discover import tracked_markets
+    from poly_events import refresh_events
+
     markets = _markets_for_books(run)
+
+    # Polymarket lists new barrier levels around 12:40 ET; a book that is never
+    # requested is a market that never existed to the model. Every known event
+    # is refreshed by slug on every tick (cheap: ~140 concurrent GETs); brand
+    # new events come from the full walk in _intraday_discovery(), last.
+    run.counts.update(refresh_events(run.http, run.cycle_id))
+    markets = tracked_markets() or markets
+
     book_stats, _books = collect_books(run.http, markets, run.cycle_id)
     run.counts.update(book_stats)
 
@@ -104,10 +121,14 @@ def job_snapshot(run: Run) -> None:
         run.status = "truncated"
         return
 
-    if should_run_kalshi()[0]:
+    last_kalshi = (read_meta("last_kalshi") or {}).get("at_utc")
+    ok, why = should_run_kalshi(run.started, parse_iso(last_kalshi))
+    if ok:
         run.counts.update(collect(run.http, run.cycle_id, with_books=True))
+        write_meta("last_kalshi", {"at_utc": utc_iso(run.started),
+                                   "cycle_id": run.cycle_id})
     else:
-        run.note("kalshi cadence: skipped this tick")
+        run.note(f"kalshi cadence: {why}")
 
     if run.out_of_time():
         run.note("deadline hit after kalshi: options skipped")
@@ -120,6 +141,45 @@ def job_snapshot(run: Run) -> None:
     else:
         run.note("outside US regular hours: options skipped")
 
+    _intraday_discovery(run)
+
+
+def _intraday_discovery(run: Run) -> None:
+    """Full walk of open events, in whatever budget the tick has left.
+
+    It runs after books, Kalshi and options, never before them. Before
+    2026-09-23 it ran first, and at the US open Gamma serves the walk at ~5 s a
+    page: the 13:30 UTC walk ate the whole 600 s budget on 2026-09-21 and
+    2026-09-22, and every opening book request failed with "run deadline
+    exceeded". A walk the budget cannot finish saves its cursor and resumes on
+    the next tick; last_discovery is stamped only when a walk completes, so an
+    unfinished one keeps being due. New markets it finds are booked from the
+    following tick.
+    """
+    from poly_discover import discover
+    from poly_events import should_run_discovery
+
+    disc_cfg = markets_cfg()["polymarket"]["discovery"]
+    last_disc = (read_meta("last_discovery") or {}).get("at_utc")
+    ok, why = should_run_discovery(
+        run.started, parse_iso(last_disc),
+        int(disc_cfg.get("intraday_interval_minutes", 0) or 0),
+        int(markets_cfg()["schedule"]["intraday_interval_minutes"]))
+    if not ok:
+        return
+    if run.out_of_time():
+        run.note(f"intraday discovery due ({why}) but no budget left: next tick")
+        return
+    run.note(f"intraday discovery: {why}")
+    markets, complete = discover(run.http, run.cycle_id)
+    if complete:
+        run.counts["poly_markets"] = len(markets)
+        write_meta("last_discovery", {"at_utc": utc_iso(run.started), "cycle_id": run.cycle_id})
+    else:
+        # Deliberately not "truncated": this tick's books, Kalshi and options
+        # are all written, and runs.status is what says a cycle is usable.
+        run.note("intraday discovery unfinished: resumes next tick")
+
 
 def job_daily(run: Run) -> None:
     """Post-close refresh of everything slow-moving."""
@@ -129,8 +189,20 @@ def job_daily(run: Run) -> None:
     from reference import collect_rates
     from underlying import collect_bars, collect_dividends_and_earnings, futures_symbols
 
-    markets = discover(run.http, run.cycle_id)
+    from poly_discover import tracked_markets
+    from poly_events import refresh_events
+
+    markets, complete = discover(run.http, run.cycle_id)
     run.counts["poly_markets"] = len(markets)
+    if complete:
+        write_meta("last_discovery", {"at_utc": utc_iso(run.started), "cycle_id": run.cycle_id})
+    else:
+        # Left due, so the next session's first tick resumes the walk.
+        run.note("discovery unfinished: resumes on the next snapshot tick")
+    # Events that have closed no longer appear in the open-events walk; this
+    # is where their final outcomes (every NO) get written.
+    run.counts.update(refresh_events(run.http, run.cycle_id))
+    markets = tracked_markets() or markets
     run.counts["resolutions"] = collect_resolutions(run.http, markets, run.cycle_id)
     run.counts["poly_price_history"] = collect_price_history(
         run.http, markets, run.cycle_id)

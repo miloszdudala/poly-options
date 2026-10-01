@@ -45,15 +45,34 @@ def write_raw(venue: str, identifier: str, payload: Any, cycle_id: str) -> Path:
     return path
 
 
+def _cycle_day(rows: Sequence[dict]) -> str | None:
+    """The UTC date a cycle *started*, read back out of its cycle_id.
+
+    The partition used to default to the write clock, which silently split one
+    cycle across two `date=` partitions whenever a run crossed UTC midnight -
+    not a corner case on a laptop, where the 2026-09-17 daily job ran from
+    21:32Z to past 01:44Z and landed poly_markets under date=2026-09-17 and
+    poly_price_history from the same cycle_id under date=2026-09-18. Filtering
+    a day's partition then drops rows without saying so.
+    """
+    for row in rows:
+        cycle_id = row.get("cycle_id")
+        if isinstance(cycle_id, str) and len(cycle_id) >= 8 and cycle_id[:8].isdigit():
+            return f"{cycle_id[:4]}-{cycle_id[4:6]}-{cycle_id[6:8]}"
+    return None
+
+
 def write_table(table: str, rows: Sequence[dict], partition_date: str | None = None) -> Path | None:
     """Append rows to store/parquet/{table}/date=YYYY-MM-DD/part-*.parquet
 
     One file per call keeps writes atomic and append-only; DuckDB reads the
-    whole tree with a glob and picks up `date` as a partition column.
+    whole tree with a glob and picks up `date` as a partition column. The
+    partition is the cycle's start date, so every row of one cycle_id lands
+    together however long the run takes.
     """
     if not rows:
         return None
-    day = partition_date or now_utc().strftime("%Y-%m-%d")
+    day = partition_date or _cycle_day(rows) or now_utc().strftime("%Y-%m-%d")
     out_dir = PARQUET_DIR / table / f"date={day}"
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = now_utc().strftime("%H%M%S%f")

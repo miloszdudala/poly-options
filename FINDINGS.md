@@ -4,7 +4,7 @@ Working notes, revised by hand. `README.md` covers how the collector runs;
 `MARKETS.md` covers which markets exist. This file is what we are trying to do,
 what we have measured, and which mistakes not to repeat.
 
-Last updated: 2026-09-17. All numbers below come from the snapshot of
+Last updated: 2026-09-18 (section 7 added; the model design is in `model/MODELS.md`). All numbers below come from the snapshot of
 2026-09-16 15:53 ET and the 21 cycles collected overnight into 2026-09-17.
 
 ---
@@ -203,3 +203,34 @@ Median spreads now: hit ~7c, close_above ~19c. Hit markets are the live ones.
 2. **Quantify the monitoring correction** and re-run the screen.
 3. **Smile-consistent barrier pricing** (whole smile, not one strike). More
    correct, more work, only refines what 1 and 2 already test.
+
+---
+
+## 7. Added 2026-09-18: lifecycle, capacity, delay
+
+- **Every closed hit market so far resolved YES** (539 of 539) because a touch
+  closes the market early and the NO outcomes only arrive at period end. The
+  collector was dropping Gamma's `outcomePrices` and `closedTime`, and events
+  that close leave the open-events walk, so **no NO outcome would ever have
+  been recorded.** Fixed: `poly_markets.result` / `closed_time`,
+  `resolutions.result` / `settled_at_utc`, and a by-slug refresh of every
+  known event on every tick (`poly_events.py`). Old rows backfilled from raw.
+- **New barriers are listed ~12:40 ET daily** (164 on 16-17 Sep, all in that
+  hour), nearest to spot; 25% of touched markets close within 4 h of listing,
+  median life 45 h. Their books were never collected on listing day. Fixed.
+- **Capacity per market, YES token, within 5c of the top ask** (median): $52
+  under 10c, $126 at 10-30c, $223 at 30-70c; NO token ~$719. One snapshot
+  offers ~$89k on YES and ~$616k on NO across all equity hit markets.
+- **Cboe is 15 minutes delayed and `source_quote_time_utc` is the file
+  time**, not the quote time; the latest print in a chain was 15 minutes
+  before the fetch and spot matched the bar 15-18 minutes earlier. Use
+  `max(last_trade_time_utc)` per symbol per cycle. The 09-16 rows had it four
+  hours late on top of that; repaired.
+- **Fair values must model regular-hours-only monitoring** (open question 5.1)
+  before any model trades: see `model/MODELS.md` §3.3 for the session-by-
+  session bridge construction that does it.
+- **Trade tape exists** (`data-api.polymarket.com/trades`, full history per
+  market, paginated) which reopens the maker question in section 1.
+- **History is reachable**: closed Feb-Aug events answer by slug with outcomes
+  and hourly prices, so the calibration test in 5.3 does not have to wait for
+  weeks of expiries.
