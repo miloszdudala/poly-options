@@ -46,6 +46,10 @@ EQUITY_EXCLUDED = {"DXY", "WTI", "XAUUSD", "XAGUSD", "NG"}
 KNOWN_THIN_DATES = {
     # Lid closed 21:06-00:15 local: 12 of 26 cycles (README, 2026-09-23).
     "2026-09-21",
+    # Collector outages; every request failed (September review 2026-10-01 and
+    # the 10-01 collector table: 22 of 23 cycles not ok).
+    "2026-09-29",
+    "2026-10-01",
 }
 
 YES, NO = 0, 1
@@ -54,6 +58,8 @@ CAPS_BY_MODEL = {
     "edge_taker": (150.0, 500.0, 1.00, 1.00),
     "factor_neutral": (150.0, 500.0, 0.08, 0.25),
     "balanced_book": (150.0, 500.0, 0.08, 1.00),
+    "direction_balanced": (150.0, 500.0, 0.10, 1.00),
+    "scenario_hedged": (150.0, 500.0, 0.12, 1.00),
     "empirical_longshot": (150.0, 500.0, 0.10, 0.30),
     "random_control": (150.0, 500.0, 0.10, 0.40),
 }
@@ -186,7 +192,7 @@ def test_option_quotes_are_the_expected_age_in_every_cycle(fair, fills):
     reversed_ = by_cycle[by_cycle < 0]
     per_date = reversed_.groupby(reversed_.index.map(data.cycle_date)).size()
     assert (per_date <= 1).all(), f"more than one chain-after-book cycle on a date: {per_date.to_dict()}"
-    option = fills[fills["model"].str.startswith(("edge_taker", "factor_neutral", "balanced_book"))]
+    option = fills[fills["model"].str.startswith(("edge_taker", "factor_neutral", "balanced_book", "direction_balanced", "scenario_hedged"))]
     ages = fair.set_index(["cycle_id", "market_id"])["quote_age_s"]
     per_fill = [ages.get((c, m), np.nan) for c, m in zip(option["cycle_id"], option["market_id"])]
     contaminated = option[np.asarray(per_fill, dtype=float) < 0]
@@ -235,7 +241,10 @@ def test_every_fair_value_is_a_probability_and_the_bound_holds(fair):
         vals = fair[col].dropna()
         assert ((vals >= 0) & (vals <= 1)).all(), f"{col} outside [0, 1]"
     both = fair[fair["fair_K"].notna() & fair["fair_cont"].notna() & ~fair["touch_pending"]]
-    below = both[both["fair_cont"] < both["fair_K"] - 2e-3]
+    # fair_K is a 20k-path Monte Carlo; three standard errors, not a flat 0.2c,
+    # or a long-dated 14% barrier fails on noise (SPX 6200, 68 sessions).
+    tol = np.maximum(2e-3, 3 * np.sqrt(both["fair_K"] * (1 - both["fair_K"]) / 20_000))
+    below = both[both["fair_cont"] < both["fair_K"] - tol]
     assert len(below) == 0, f"{len(below)} rows where the continuous bound is below fair_K"
 
 
@@ -356,7 +365,7 @@ def test_an_earnings_gap_is_always_repaired_or_excluded(fair, fills):
         pytest.skip("no earnings-gap market-cycles yet")
     unrepaired = gap[gap["vol_source"] != "pre_earnings_flat"]
     keyed = set(zip(unrepaired["cycle_id"], unrepaired["market_id"]))
-    option_models = fills[fills["model"].isin(["edge_taker", "factor_neutral", "balanced_book"])]
+    option_models = fills[fills["model"].isin(["edge_taker", "factor_neutral", "balanced_book", "direction_balanced", "scenario_hedged"])]
     traded = option_models[[(c, m) in keyed for c, m in
                             zip(option_models["cycle_id"], option_models["market_id"])]]
     assert traded.empty, f"{len(traded)} option-signal fills on an unrepaired earnings gap"
@@ -484,7 +493,7 @@ def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
     one, the market was neither deep OTM nor chainless, and the price paid
     cleared MODELS 5.1's EV and ROI bars against that fair."""
     keyed = _fair_at(fair)
-    option = fills[fills["model"].str.startswith(("edge_taker", "factor_neutral", "balanced_book"))]
+    option = fills[fills["model"].str.startswith(("edge_taker", "factor_neutral", "balanced_book", "direction_balanced", "scenario_hedged"))]
     if option.empty:
         pytest.skip("no option-signal fills yet")
     bad = []

@@ -48,6 +48,16 @@ from util import get_logger
 log = get_logger("model.sim")
 
 YES, NO = 0, 1
+#: The volatility risk premium, charged on every YES bought on the option
+#: signal (decided 2026-10-09; INSIGHTS §7.2). Option prices include the price
+#: of crash insurance: on the S&P 500, 1995-2026, implied vol sat 3.7 points
+#: above the vol that followed on 83% of days, ~2-3 points in at-the-money
+#: terms, which is ~2-5c of touch probability on our barriers. A YES priced off
+#: options looks that much better than it is, so it has to clear the EV bar
+#: *plus* this. NO is not credited with it: there it is payment for carrying
+#: crash risk, not edge. A fixed number from 31 years, not fitted to our data.
+YES_RISK_PREMIUM = 0.02
+
 LONG_STOCK = "long_stock"     # hit_up YES, hit_down NO
 SHORT_STOCK = "short_stock"   # hit_down YES, hit_up NO
 
@@ -389,7 +399,8 @@ def candidate_edges(state: CycleState, *, min_ev: float = 0.03, min_roi: float =
                     high_price: float = 0.90, high_price_min_roi: float = 0.02,
                     high_price_min_ev: float = 0.0,
                     exclude_deep_otm: bool = True,
-                    require_chain: bool = True) -> pd.DataFrame:
+                    require_chain: bool = True,
+                    yes_premium: float = YES_RISK_PREMIUM) -> pd.DataFrame:
     """MODELS 5.1's bar, evaluated on both tokens of every priced market.
 
     The conservative fair differs by side and that is not symmetry for its own
@@ -401,6 +412,10 @@ def candidate_edges(state: CycleState, *, min_ev: float = 0.03, min_roi: float =
     MODELS 2's second bar - ROI >= 2% above 90c instead of EV >= 3c - is here
     rather than in the models because A, B and B-simple share this signal
     verbatim; only C replaces it.
+
+    **YES pays the risk premium** (`YES_RISK_PREMIUM`, 2c): a YES's EV, ROI and
+    limit are computed on `win_prob - yes_premium`. `fair` and `win_prob` stay
+    the engine's numbers, so the reliability tables still score the engine.
 
     Returns one row per tradeable (market_id, outcome_index) with the edge at
     the **top of the ask ladder**. The harness re-checks every deeper level
@@ -454,7 +469,10 @@ def candidate_edges(state: CycleState, *, min_ev: float = 0.03, min_roi: float =
     q_cons = np.where(both, np.where(is_yes, np.fmin(k, atm), np.fmax(k, atm)), np.nan)
     merged["fair"] = q_cons
     merged["win_prob"] = np.where(is_yes, q_cons, 1.0 - q_cons)
-    merged["ev"] = merged["win_prob"] - merged["cost"]
+    # The value the bar is judged on: a YES is charged the risk premium.
+    merged["premium"] = np.where(is_yes, yes_premium, 0.0)
+    value = merged["win_prob"] - merged["premium"]
+    merged["ev"] = value - merged["cost"]
     merged["roi"] = merged["ev"] / merged["cost"].replace(0.0, np.nan)
 
     dear = merged["ask"] > high_price
@@ -463,8 +481,8 @@ def candidate_edges(state: CycleState, *, min_ev: float = 0.03, min_roi: float =
     merged["ev_bar"], merged["roi_bar"] = ev_bar, roi_bar
     # The limit the harness walks to: the worse of the two bars, so a deeper
     # level has to clear both, exactly as the top level did.
-    by_ev = merged["win_prob"] - ev_bar
-    by_roi = merged["win_prob"] / (1.0 + roi_bar)
+    by_ev = value - ev_bar
+    by_roi = value / (1.0 + roi_bar)
     merged["limit_price"] = np.fmin(by_ev, by_roi)
 
     keep = (merged["win_prob"].notna() & (merged["ev"] >= ev_bar)

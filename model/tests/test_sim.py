@@ -479,7 +479,8 @@ def test_the_limit_the_harness_walks_to_honours_both_bars():
     books = book(CYCLE_A, [(0.20, 1000.0)])
     fair = fair_rows(CYCLE_A, [{"fair_K": 0.40, "fair_atm": 0.40}])
     row = sim.candidate_edges(state(books=books, fair=fair)).iloc[0]
-    assert row["limit_price"] == pytest.approx(min(0.40 - 0.03, 0.40 / 1.08))
+    value = 0.40 - sim.YES_RISK_PREMIUM          # a YES pays the premium
+    assert row["limit_price"] == pytest.approx(min(value - 0.03, value / 1.08))
 
 
 # ------------------------------------------------------------- the ledger

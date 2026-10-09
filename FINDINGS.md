@@ -227,7 +227,7 @@ Median spreads now: hit ~7c, close_above ~19c. Hit markets are the live ones.
   `max(last_trade_time_utc)` per symbol per cycle. The 09-16 rows had it four
   hours late on top of that; repaired.
 - **Fair values must model regular-hours-only monitoring** (open question 5.1)
-  before any model trades: see `model/MODELS.md` §3.3 for the session-by-
+  before any model trades: see `model/INSIGHTS.md` §3.3 for the session-by-
   session bridge construction that does it.
 - **Trade tape exists** (`data-api.polymarket.com/trades`, full history per
   market, paginated) which reopens the maker question in section 1.

@@ -237,14 +237,21 @@ def daily_bars(symbol: str) -> pd.DataFrame:
     before anything derives from it, and here is the one place every consumer
     passes through.
     """
+    # "Newest" needs the fetch time in the sort: without it DuckDB's row order
+    # decided which version survived, and it differs run to run - betas moved
+    # and factor_neutral traded 115-141 fills on the same data (2026-10-09).
+    # Empty closes (a partial fetch on 09-18) never win.
     df = _q(f"""
-        select distinct symbol, bar_time_utc, open, high, low, close, volume
+        select symbol, bar_time_utc, open, high, low, close, volume, fetched_at_utc
         from {_src('underlying_bars')}
-        where interval = '1d' and symbol = '{symbol}'
+        where interval = '1d' and symbol = '{symbol}' and close is not null
     """)
     df["bar_time"] = pd.to_datetime(df["bar_time_utc"], format="ISO8601", utc=True)
-    return (df.sort_values("bar_time")
+    if "fetched_at_utc" not in df:
+        df["fetched_at_utc"] = ""
+    return (df.sort_values(["bar_time", "fetched_at_utc"], kind="stable")
               .drop_duplicates(subset="bar_time", keep="last")
+              .drop(columns="fetched_at_utc")
               .reset_index(drop=True))
 
 
@@ -280,12 +287,20 @@ def daily_bars_asof(symbol: str, as_of) -> pd.DataFrame:
 @functools.lru_cache(maxsize=1)
 def bars_5m() -> pd.DataFrame:
     """All stored 5-minute bars, sorted, for the spot-at-book-time lookup."""
+    # One version per bar, newest fetch wins - as `daily_bars`, for its reason:
+    # 20 FX/commodity bars were stored twice with different prices.
     df = _q(f"""
-        select distinct symbol, bar_time_utc, open, high, low, close
+        select symbol, bar_time_utc, open, high, low, close, fetched_at_utc
         from {_src('underlying_bars')} where interval = '5m'
     """)
     df["bar_time"] = pd.to_datetime(df["bar_time_utc"], format="ISO8601", utc=True)
-    return df.sort_values("bar_time").reset_index(drop=True)
+    if "fetched_at_utc" not in df:
+        df["fetched_at_utc"] = ""
+    return (df.sort_values(["symbol", "bar_time", "fetched_at_utc"], kind="stable")
+              .drop_duplicates(subset=["symbol", "bar_time"], keep="last")
+              .drop(columns="fetched_at_utc")
+              .sort_values(["bar_time", "symbol"], kind="stable")
+              .reset_index(drop=True))
 
 
 def spot_at(times: pd.Series, symbols: pd.Series) -> pd.Series:
@@ -500,7 +515,12 @@ def resolutions_upto(when: dt.datetime | str) -> pd.DataFrame:
     The harness replays cycles in order and must never see an outcome that had
     not happened yet; that is enforced here rather than in every caller.
     """
-    stamp = str(when)
+    # Compared as instants, not text: the column is ISO with a 'T' and
+    # `str(pd.Timestamp)` has a space, so as strings every settlement on the
+    # cutoff's own date sorted after it and the last day never settled
+    # (review 2026-10-09).
+    stamp = pd.Timestamp(when)
+    stamp = (stamp.tz_localize("UTC") if stamp.tz is None else stamp.tz_convert("UTC")).isoformat()
     df = _q(f"""
         select market_id, result, settled_at_utc, ticker, contract_type, barrier,
                outcome_prices
@@ -508,7 +528,8 @@ def resolutions_upto(when: dt.datetime | str) -> pd.DataFrame:
             select *, row_number() over (partition by market_id
                                          order by fetched_at_utc desc) rn
             from {_src('resolutions')}
-            where settled_at_utc is not null and settled_at_utc <= '{stamp}'
+            where settled_at_utc is not null
+              and cast(settled_at_utc as timestamptz) <= cast('{stamp}' as timestamptz)
         ) where rn = 1
     """)
     df["settled_at_utc"] = pd.to_datetime(df["settled_at_utc"], format="ISO8601",

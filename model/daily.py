@@ -45,13 +45,34 @@ from engine import price_cycle  # noqa: E402
 EASTERN = ZoneInfo("America/New_York")
 GAP_WINDOW_DAYS = 7
 CADENCE_S = 900.0        # the snapshot job's own interval; see scheduling/
+BARS_PROBE = "SPY"       # always collected; its bars stand for the day's
+BARS_LAG = pd.Timedelta(minutes=10)   # bars are stamped at their start
 
 
 # --------------------------------------------------------------- 1. price
 
 
-def unpriced_cycles(dates: list[str]) -> dict[str, list[str]]:
-    """Session cycles with books that the engine has not priced yet."""
+def bars_cover(cycle_id: str) -> bool:
+    """Have the 5-minute bars reached this cycle yet?
+
+    Without them the touch check sees no evidence and calls every barrier
+    untouched, and the spot falls back to Cboe's delayed last. 09-23, 09-29
+    and 10-01 were priced that way during collector outages, never repriced
+    once the bars arrived, and 40 fills landed on barriers that had already
+    printed (review 2026-10-09). A deferred cycle stays unpriced, so the next
+    run picks it up.
+    """
+    bars = data.bars_5m()
+    spy = bars.loc[bars["symbol"] == BARS_PROBE, "bar_time"]
+    if spy.empty:
+        return False
+    stamp = pd.Timestamp(dt.datetime.strptime(cycle_id[:16], "%Y%m%dT%H%M%SZ"), tz="UTC")
+    return spy.max() >= stamp - BARS_LAG
+
+
+def unpriced_cycles(dates: list[str], echo=None) -> dict[str, list[str]]:
+    """Session cycles with books that the engine has not priced yet, minus
+    those whose bars have not arrived (`bars_cover`)."""
     out = {}
     for date in dates:
         priced = set()
@@ -59,6 +80,10 @@ def unpriced_cycles(dates: list[str]) -> dict[str, list[str]]:
         if len(frame):
             priced = set(frame["cycle_id"].unique())
         missing = [c for c in data.session_cycles(date) if c not in priced]
+        deferred = [c for c in missing if not bars_cover(c)]
+        if deferred and echo:
+            echo(f"  deferred {len(deferred)} cycle(s) on {date}: no 5-minute bars yet")
+        missing = [c for c in missing if c not in deferred]
         if missing:
             out[date] = missing
     return out
@@ -73,7 +98,7 @@ def price_missing(dates: list[str], echo=None) -> list[dict]:
     everything.
     """
     stats = []
-    for date, cycles in unpriced_cycles(dates).items():
+    for date, cycles in unpriced_cycles(dates, echo=echo).items():
         for cycle_id in cycles:
             frame, stat = price_cycle(cycle_id)
             if len(frame):

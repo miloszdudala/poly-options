@@ -124,7 +124,7 @@ class EmpiricalLongshot:
         """MODELS 5.3's veto: the option engine may only say no.
 
         A missing `fair_K` is not a veto. Roughly a fifth of the universe is
-        commodity and FX ladders with no equity chain at all (HANDOFF P2), and
+        commodity and FX ladders with no equity chain at all (measured 2026-09-18), and
         treating "the engine has no opinion" as "the engine disagrees" would
         delete the part of the universe this model exists to trade.
         """

@@ -286,3 +286,47 @@ def test_earnings_intervals_are_half_open_and_as_of_falls_back_to_the_first_fetc
     assert data.earnings_between("MU", "2026-12-01", "2026-12-31",
                                  as_of="2026-09-20T14:00:00Z") is False
     assert data.earnings_between("MU", deadline, after, as_of="2026-09-16T14:00:00Z") is True
+
+
+def test_a_same_day_settlement_is_seen_by_a_later_cycle(tmp_path, monkeypatch):
+    """Stored stamps are ISO ('T'), `str(pd.Timestamp)` has a space: compared as
+    text, a 13:48Z settlement sorted after a 19:45Z cutoff on the same date and
+    the last day of every run never settled (review 2026-10-09)."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = tmp_path / "resolutions"
+    table.mkdir()
+    rows = {"market_id": ["early", "late"], "result": ["Yes", "Yes"],
+            "settled_at_utc": ["2026-10-08T13:48:42+00:00", "2026-10-08T20:44:56+00:00"],
+            "fetched_at_utc": ["2026-10-08T21:31:32+00:00"] * 2,
+            "ticker": ["META", "DXY"], "contract_type": ["hit_down", "hit_up"],
+            "barrier": [720.0, 102.5], "outcome_prices": ["[1, 0]", "[1, 0]"]}
+    pq.write_table(pa.table(rows), table / "part-0.parquet")
+    monkeypatch.setattr(data, "PARQUET_DIR", tmp_path)
+    for cutoff in (pd.Timestamp("2026-10-08T19:45:01Z"), "2026-10-08 19:45:01+00:00",
+                   pd.Timestamp("2026-10-08 15:45:01", tz="America/New_York")):
+        seen = set(data.resolutions_upto(cutoff)["market_id"])
+        assert seen == {"early"}, cutoff
+
+
+def test_daily_bars_keep_the_newest_non_empty_version(tmp_path, monkeypatch):
+    """The dedupe used to keep whichever duplicate DuckDB returned last, which
+    changed run to run and moved every beta (2026-10-09)."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = tmp_path / "underlying_bars"
+    table.mkdir()
+    stamp = "2026-09-22T04:00:00+00:00"
+    rows = {"symbol": ["META"] * 3, "interval": ["1d"] * 3, "bar_time_utc": [stamp] * 3,
+            "open": [1.0] * 3, "high": [1.0] * 3, "low": [1.0] * 3,
+            "close": [736.594971, None, 736.599976], "volume": [1.0] * 3,
+            "fetched_at_utc": ["2026-09-22T21:41:26+00:00", "2026-09-25T01:00:00+00:00",
+                               "2026-09-24T20:40:16+00:00"]}
+    for i in range(3):        # one file per row, so file order cannot decide it
+        pq.write_table(pa.table({k: [v[i]] for k, v in rows.items()}), table / f"part-{i}.parquet")
+    monkeypatch.setattr(data, "PARQUET_DIR", tmp_path)
+    bars = data.daily_bars.__wrapped__("META") if hasattr(data.daily_bars, "__wrapped__") \
+        else data.daily_bars("META")
+    assert bars["close"].tolist() == [736.599976]

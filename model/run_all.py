@@ -35,7 +35,8 @@ sys.path.append(str(HERE.parent / "data" / "src"))   # see model/data.py
 
 import data  # noqa: E402
 import sim  # noqa: E402
-from models import BalancedBook, EdgeTaker, EmpiricalLongshot, FactorNeutral  # noqa: E402
+from models import (BalancedBook, DirectionBalanced, EdgeTaker, EmpiricalLongshot,  # noqa: E402
+                    FactorNeutral, ScenarioHedged)
 
 SUMMARY_COLUMNS = [
     ("model", "model", "{}"),
@@ -68,6 +69,8 @@ def build_models(min_ev: float = 0.03, min_roi: float = 0.08, tag: str = "") -> 
     models = [EdgeTaker(min_ev=min_ev, min_roi=min_roi),
               FactorNeutral(min_ev=min_ev, min_roi=min_roi),
               BalancedBook(min_ev=min_ev, min_roi=min_roi),
+              DirectionBalanced(min_ev=min_ev, min_roi=min_roi),
+              ScenarioHedged(min_ev=min_ev, min_roi=min_roi),
               EmpiricalLongshot()]
     if tag:
         for model in models:

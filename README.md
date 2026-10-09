@@ -4,8 +4,9 @@ Read-only data collection for comparing Polymarket (and Kalshi) contracts on US
 stock prices with probabilities implied by listed options.
 
 **This repository collects data only.** No accounts, no API keys, no orders.
-Modelling and signal logic belong in `model/`: `model/MODELS.md` is the
-simulation design, `model/OPUS_PROMPTS.md` the implementation passes.
+Modelling and signal logic belong in `model/`: `model/MODELS.md` describes
+each model and its results, `model/INSIGHTS.md` the engine, the accounting
+and what the data has taught us.
 
 Because liquidity is thin, the **full order book** (every level, both sides, both
 outcome tokens) is stored at every snapshot. Mid, last trade and best bid/ask are

@@ -94,7 +94,8 @@ def build(dates: list[str] | None = None) -> pd.DataFrame:
     both = k.notna() & atm.notna()
     q = np.where(both, np.where(yes, np.fmin(k, atm), np.fmax(k, atm)), np.nan)
     out["win_prob"] = np.where(yes, q, 1.0 - q)
-    out["ev"] = out["win_prob"] - out["cost"]
+    # YES is charged the risk premium, as in `sim.candidate_edges`.
+    out["ev"] = out["win_prob"] - np.where(yes, sim.YES_RISK_PREMIUM, 0.0) - out["cost"]
     out["roi"] = out["ev"] / out["cost"]
     emp = out["fair_empirical"]
     out["win_prob_emp"] = np.where(yes, emp, 1.0 - emp)

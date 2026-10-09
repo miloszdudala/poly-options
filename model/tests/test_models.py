@@ -12,7 +12,8 @@ import pytest
 
 import sim
 from sim import NO, YES, Params
-from models import BalancedBook, EdgeTaker, EmpiricalLongshot, FactorNeutral
+from models import (BalancedBook, DirectionBalanced, EdgeTaker, EmpiricalLongshot, FactorNeutral,
+                    ScenarioHedged)
 from test_sim import BOOK_COLUMNS, CYCLE_A, CYCLE_B, book, fair_rows, state
 
 
@@ -452,3 +453,101 @@ def test_balanced_book_does_not_let_a_projected_fill_raise_the_floor():
     orders = model.propose(world(specs, params=BalancedBook.params, portfolio=portfolio))
     assert [(o.market_id, o.outcome_index) for o in orders] == [("y1", YES)]
     assert model.refusals.get("quadrant_balance") == 1
+
+
+# ------------------------------------------------------- direction_balanced
+
+
+def _hold_dir(portfolio, key, contract_type, outcome, cost):
+    portfolio.open[(key, outcome)] = sim.Position(
+        market_id=key, outcome_index=outcome, ticker="ZZ", contract_type=contract_type,
+        barrier=1.0, deadline=pd.NaT, period="w", entry_cycle_id=CYCLE_A,
+        entry_at=pd.Timestamp("2026-09-16T14:00:00Z"), entry_fair=0.4, shares=1.0,
+        cost_usd=cost)
+
+
+def test_direction_balanced_stops_one_direction_at_the_slack():
+    """Five hit_up YES are all "stock goes up"; with nothing on the down side
+    the slack is the whole allowance."""
+    specs = [(market(f"u{i}", f"T{i}", "hit_up", yes_ask=0.20),
+              priced(f"u{i}", f"T{i}", "hit_up", fair=0.40)) for i in range(5)]
+    model = DirectionBalanced(balance_slack=500.0)
+    orders = model.propose(world(specs, params=DirectionBalanced.params))
+    assert sum(o.max_usd for o in orders) == pytest.approx(500.0)
+    assert model.refusals.get("direction_balance") == 1
+
+
+def test_direction_balanced_counts_a_hit_down_no_as_stock_up():
+    """NO on hit_down is a bet the stock will not fall: the same side as YES
+    on hit_up, so it uses up the same allowance."""
+    portfolio = sim.Portfolio(DirectionBalanced.params)
+    _hold_dir(portfolio, "d0", "hit_down", NO, 500.0)
+    specs = [(market("u0", "T0", "hit_up", yes_ask=0.20),
+              priced("u0", "T0", "hit_up", fair=0.40))]
+    orders = DirectionBalanced(balance_slack=500.0).propose(
+        world(specs, params=DirectionBalanced.params, portfolio=portfolio))
+    assert orders == []
+
+
+def test_direction_balanced_opens_up_once_the_other_side_is_hold_dir():
+    """$400 of "stock goes down" (a hit_up NO) lets "up" grow to $900."""
+    portfolio = sim.Portfolio(DirectionBalanced.params)
+    _hold_dir(portfolio, "n0", "hit_up", NO, 400.0)
+    specs = [(market(f"u{i}", f"T{i}", "hit_up", yes_ask=0.20),
+              priced(f"u{i}", f"T{i}", "hit_up", fair=0.40)) for i in range(8)]
+    orders = DirectionBalanced(balance_slack=500.0).propose(
+        world(specs, params=DirectionBalanced.params, portfolio=portfolio))
+    assert sum(o.max_usd for o in orders) == pytest.approx(900.0)
+
+
+# --------------------------------------------------------- scenario_hedged
+
+
+def test_scenario_payoffs_follow_the_barrier():
+    from models.scenario_hedged import SCENARIOS, payoff
+    up_yes = payoff("hit_up", YES, 1.0)
+    assert up_yes.tolist() == [float(z >= 1.0) for z in SCENARIOS]
+    assert (payoff("hit_up", NO, 1.0) == 1 - up_yes).all()
+    assert payoff("hit_down", YES, -1.0)[0] == 1.0 and payoff("hit_down", YES, -1.0)[-1] == 0.0
+
+
+def test_scenario_hedged_trims_a_bet_to_the_loss_budget():
+    """A YES loses its whole cost in every scenario that does not reach it, so
+    with a $100 budget and nothing held it can put in $100 and no more."""
+    model = ScenarioHedged(loss_budget=100.0)
+    t = model._largest_scale(np.zeros(3), np.array([-150.0, -150.0, 300.0]))
+    assert t == pytest.approx(100.0 / 150.0)
+
+
+def test_scenario_hedged_lets_a_hedge_in_when_it_covers_the_hole():
+    """A book losing $900 if the market falls takes a bet that pays then."""
+    model = ScenarioHedged(loss_budget=1_000.0)
+    book = np.array([-900.0, 50.0, 50.0])
+    assert model._largest_scale(book, np.array([200.0, -40.0, -40.0])) == 1.0
+    assert model._largest_scale(book, np.array([-200.0, 10.0, 10.0])) == pytest.approx(0.5)
+
+
+# ------------------------------------------------------- the YES risk premium
+
+
+def test_a_yes_must_clear_the_bar_plus_the_risk_premium():
+    """INSIGHTS 7.2: a YES at 20c with fair 0.24 has 4c of raw EV (minus a
+    0.8c fee), which clears a 3c bar only without the 2c premium."""
+    specs = [(market("u0", "T0", "hit_up", yes_ask=0.20),
+              priced("u0", "T0", "hit_up", fair=0.24))]
+    state = world(specs)
+    assert sim.YES_RISK_PREMIUM == 0.02
+    with_premium = sim.candidate_edges(state)
+    without = sim.candidate_edges(state, yes_premium=0.0)
+    assert with_premium[with_premium["outcome_index"] == YES].empty
+    assert not without[without["outcome_index"] == YES].empty
+
+
+def test_the_premium_is_not_charged_to_no():
+    specs = [(market("u0", "T0", "hit_up", yes_ask=0.20),
+              priced("u0", "T0", "hit_up", fair=0.05))]
+    state = world(specs)
+    a = sim.candidate_edges(state)
+    b = sim.candidate_edges(state, yes_premium=0.0)
+    a, b = a[a["outcome_index"] == NO], b[b["outcome_index"] == NO]
+    assert len(a) == len(b) and np.allclose(a["ev"], b["ev"])

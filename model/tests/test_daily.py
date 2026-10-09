@@ -21,6 +21,13 @@ SCHEDULING = REPO / "scheduling"
 # ------------------------------------------------------- 1. price the gaps
 
 
+@pytest.fixture(autouse=True)
+def _bars_present(request, monkeypatch):
+    """The fake cycle ids below have no clock; the bar guard has its own tests."""
+    if "bar_guard" not in request.node.name:
+        monkeypatch.setattr(daily, "bars_cover", lambda cycle_id: True)
+
+
 def test_only_the_cycles_that_are_missing_are_priced(monkeypatch):
     monkeypatch.setattr(daily.data, "session_cycles",
                         lambda date: ["c1", "c2", "c3"])
@@ -42,12 +49,42 @@ def test_a_date_with_nothing_priced_yet_needs_all_of_it(monkeypatch):
     assert daily.unpriced_cycles(["2026-09-16"]) == {"2026-09-16": ["c1", "c2"]}
 
 
+def _spy_bars_until(stamp):
+    return pd.DataFrame({"symbol": ["SPY"], "bar_time": [pd.Timestamp(stamp, tz="UTC")]})
+
+
+def test_bar_guard_defers_a_cycle_the_bars_have_not_reached(monkeypatch):
+    """10-01: the collector's outage left no 5-minute bars at report time, the
+    touch check saw no evidence, and fills landed on barriers already printed."""
+    monkeypatch.setattr(daily.data, "bars_5m", lambda: _spy_bars_until("2026-10-01 13:55"))
+    monkeypatch.setattr(daily.data, "session_cycles",
+                        lambda date: ["20261001T140000Z-a", "20261001T141106Z-b"])
+    monkeypatch.setattr(daily.data, "fair_values", lambda date: pd.DataFrame())
+    lines = []
+    assert daily.unpriced_cycles(["2026-10-01"], echo=lines.append) == {
+        "2026-10-01": ["20261001T140000Z-a"]}
+    assert "deferred 1 cycle(s)" in lines[0]
+
+
+def test_bar_guard_passes_a_cycle_inside_the_newest_bar(monkeypatch):
+    monkeypatch.setattr(daily.data, "bars_5m", lambda: _spy_bars_until("2026-10-01 19:55"))
+    assert daily.bars_cover("20261001T200001Z-a")
+    monkeypatch.setattr(daily.data, "bars_5m", lambda: _spy_bars_until("2026-10-01 19:45"))
+    assert not daily.bars_cover("20261001T200001Z-a")
+
+
+def test_bar_guard_defers_everything_with_no_bars_at_all(monkeypatch):
+    monkeypatch.setattr(daily.data, "bars_5m",
+                        lambda: pd.DataFrame({"symbol": [], "bar_time": []}))
+    assert not daily.bars_cover("20261001T140000Z-a")
+
+
 def test_price_missing_writes_one_partition_entry_per_missing_cycle(monkeypatch):
     """Appends rather than rewriting the partition, which is only safe because
     the cycles written are exactly the ones that were absent."""
     written = []
     monkeypatch.setattr(daily, "unpriced_cycles",
-                        lambda dates: {"2026-09-16": ["c2"]})
+                        lambda dates, echo=None: {"2026-09-16": ["c2"]})
     monkeypatch.setattr(daily, "price_cycle",
                         lambda cycle_id: (pd.DataFrame([{"market_id": "m"}]),
                                           {"markets": 1, "priced": 1, "seconds": 0.1}))
@@ -62,7 +99,7 @@ def test_an_empty_pricing_result_is_not_written(monkeypatch):
     """A cycle whose markets all failed to price has no rows; writing an empty
     part file would leave a partition entry that claims the cycle is done."""
     written = []
-    monkeypatch.setattr(daily, "unpriced_cycles", lambda dates: {"2026-09-16": ["c2"]})
+    monkeypatch.setattr(daily, "unpriced_cycles", lambda dates, echo=None: {"2026-09-16": ["c2"]})
     monkeypatch.setattr(daily, "price_cycle",
                         lambda cycle_id: (pd.DataFrame(),
                                           {"markets": 0, "priced": 0, "seconds": 0.0}))

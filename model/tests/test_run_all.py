@@ -123,7 +123,8 @@ def test_every_model_run_all_builds_carries_its_own_params():
     the defaults would be measuring a different strategy than the one named."""
     models = run_all.build_models()
     assert [m.name for m in models] == ["edge_taker", "factor_neutral",
-                                        "balanced_book", "empirical_longshot"]
+                                        "balanced_book", "direction_balanced",
+                                        "scenario_hedged", "empirical_longshot"]
     assert len({(m.params.ticker_cap_frac, m.params.direction_cap_frac)
                 for m in models}) == len(models)
 
@@ -138,6 +139,7 @@ def test_a_tagged_threshold_sweep_gets_its_own_names():
     """So a month-end re-run at a 10c bar does not overwrite the 3c run."""
     models = run_all.build_models(min_ev=0.10, min_roi=0.20, tag="ev10")
     assert [m.name for m in models] == ["edge_taker_ev10", "factor_neutral_ev10",
-                                        "balanced_book_ev10", "empirical_longshot_ev10"]
+                                        "balanced_book_ev10", "direction_balanced_ev10",
+                                        "scenario_hedged_ev10", "empirical_longshot_ev10"]
     assert models[0].min_ev == 0.10 and models[1].min_roi == 0.20
     assert run_all.build_models()[0].name == "edge_taker"
