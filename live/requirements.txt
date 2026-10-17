@@ -1,0 +1,4 @@
+# On top of the repository's requirements.txt (pricing.py runs the model/
+# engine, which needs those). Installing this downgraded websockets 17.1 ->
+# 15.0.1 on 2026-10-17; the data/ and model/ suites still pass on it.
+polymarket-client==0.13.0
