@@ -15,7 +15,7 @@ The traps this module owns:
   `market_id`, always.
 * **`depth_rank = 0` is top of book; `level_rank = 0` is the worst price**, the
   CLOB returns both sides worst-first.
-* **The session filter is 13:30Z-20:00Z** (DST until 1 Nov) and **2026-09-17 is
+* **The session filter is 09:30-16:00 New York time** and **2026-09-17 is
   dropped**: the laptop slept and its four cycles are truncated, one of them
   gathered over 126 minutes. `session_cycles` also drops any cycle whose run
   was truncated or took longer than one cadence.
@@ -43,9 +43,12 @@ from config import PARQUET_DIR  # noqa: E402
 
 EASTERN = "America/New_York"
 
-# MODELS section 6. Both bounds are inclusive of the cycle's start stamp.
-SESSION_OPEN_Z = "133000"
-SESSION_CLOSE_Z = "200000"
+# MODELS section 6. Both bounds are inclusive of the cycle's start stamp, and
+# are New York wall-clock times. They were 13:30Z-20:00Z until 2026-10-17,
+# which is right only during US daylight saving: from 1 November it would
+# have dropped the session's last hour and kept an hour before the open.
+SESSION_OPEN_ET = (9, 30)
+SESSION_CLOSE_ET = (16, 0)
 EXCLUDED_DATES = frozenset({"2026-09-17"})
 
 
@@ -75,11 +78,14 @@ def cycle_start(cycle_id: str) -> dt.datetime:
 
 
 def in_session(cycle_id: str) -> bool:
-    """13:30Z-20:00Z on a date that is not on the excluded list."""
+    """09:30-16:00 New York time on a date that is not on the excluded list."""
     if cycle_date(cycle_id) in EXCLUDED_DATES:
         return False
-    stamp = cycle_id[9:15]
-    return SESSION_OPEN_Z <= stamp <= SESSION_CLOSE_Z
+    from zoneinfo import ZoneInfo
+
+    local = cycle_start(cycle_id).astimezone(ZoneInfo(EASTERN))
+    clock = (local.hour, local.minute, local.second)
+    return (*SESSION_OPEN_ET, 0) <= clock <= (*SESSION_CLOSE_ET, 0)
 
 
 # A run longer than one 15-minute cadence was gathered across sleep or a retry
@@ -129,6 +135,20 @@ def books(cycle_id: str, contract_types: tuple[str, ...] = ("hit_up", "hit_down"
     for col in ("book_timestamp_utc", "fetched_at_utc", "end_date"):
         df[col] = pd.to_datetime(df[col], format="ISO8601", utc=True, errors="coerce")
     return df
+
+
+def books_recheck(cycle_id: str) -> pd.DataFrame:
+    """The ask side of the second read of one cycle's books (`poly_books_recheck`,
+    ~40 s after the first, from 2026-10-16 17:00Z). Empty for cycles before it."""
+    root = PARQUET_DIR / "poly_books_recheck"
+    if not root.exists() or not any(root.rglob("*.parquet")):
+        return pd.DataFrame()
+    return _q(f"""
+        select cycle_id, fetched_at_utc, market_id, outcome_index, price, size
+        from {_src('poly_books_recheck')}
+        where cycle_id = '{cycle_id}' and side = 'ask'
+        order by market_id, outcome_index, price
+    """)
 
 
 def market_book_times(cycle_id: str) -> pd.DataFrame:

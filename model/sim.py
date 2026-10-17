@@ -717,6 +717,42 @@ def check_persistence(fills: list[Fill], next_books: pd.DataFrame) -> None:
         fill.confirmed = size >= fill.shares - 1e-9
 
 
+def confirm_by_recheck(fills: list[Fill], recheck: pd.DataFrame, fee_rate: float = 0.04) -> None:
+    """Confirm a cycle's fills against the second read of the same books, ~40 s on.
+
+    The question is the one a live trader faces: after seeing the book and
+    deciding, could the bet still be bought? So it is asked of the order, not
+    of the exact level: the recheck's asks for the same token are summed over
+    every level whose all-in cost is still under the order's limit, and the
+    order's fills, best level first, are confirmed while that total covers
+    them. Measured 2026-10-16: most levels "lost" by the next-cycle rule were
+    the same size re-quoted a tick or two away by a repricing bot, and 11 of
+    15 orders were still fully buyable at the recheck against 6 at the next
+    snapshot. Requiring the full size we took, not half of it, keeps the rule
+    on the strict side.
+
+    A cycle without a recheck (before 2026-10-16 17:00Z) leaves the fills
+    alone for `check_persistence` at the next cycle.
+    """
+    if recheck is None or recheck.empty:
+        return
+    by_order: dict[tuple, list[Fill]] = {}
+    for fill in fills:
+        by_order.setdefault((fill.market_id, fill.outcome_index), []).append(fill)
+    for (market_id, outcome_index), group in by_order.items():
+        limit = group[0].limit_price
+        ladder = recheck[(recheck["market_id"] == market_id)
+                         & (recheck["outcome_index"] == outcome_index)]
+        prices = ladder["price"].astype(float).to_numpy()
+        costs = prices + fee_rate * np.minimum(prices, 1.0 - prices)
+        left = float(ladder["size"].astype(float).to_numpy()[(costs < limit) & (prices > 0)].sum())
+        for fill in sorted(group, key=lambda f: f.depth_rank):
+            fill.checked = True
+            fill.next_level_size = left
+            fill.confirmed = left >= fill.shares - 1e-9
+            left = max(0.0, left - fill.shares)
+
+
 # ------------------------------------------------------------- resolution
 
 
@@ -831,6 +867,9 @@ class Loader:
             self._fair_by_date[date] = data.fair_values(date)
         return self._fair_by_date[date]
 
+    def recheck(self, cycle_id: str) -> pd.DataFrame:
+        return data.books_recheck(cycle_id)
+
     def books(self, cycle_id: str) -> pd.DataFrame:
         if cycle_id not in self._books:
             if len(self._books) > 3:
@@ -910,12 +949,15 @@ def run(model, dates: list[str] | None = None, params: Params | None = None,
                            params=params, loader=loader)
         orders = list(model.propose(state) or [])
         fills, capacity = execute(state, orders)
+        # The ~40 s recheck where it exists, the next cycle where it does not.
+        if fills and hasattr(loader, "recheck"):
+            confirm_by_recheck(fills, loader.recheck(cycle_id), params.fee_rate)
         all_fills += fills
         capacity_rows += capacity
         cycle_marks = _marks(state, run_id, model.name, betas)
         mark_rows += cycle_marks
         equity_rows.append(_equity(state, cycle_marks))
-        previous_fills = fills
+        previous_fills = [f for f in fills if not f.checked]
         if index == len(cycles) - 1:
             # No next cycle to check the last fills against: they stay
             # unchecked, and the confirmed ledger leaves them out.

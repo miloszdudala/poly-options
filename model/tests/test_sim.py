@@ -277,6 +277,53 @@ def test_a_fill_with_no_next_cycle_is_unchecked_not_assumed_good():
     assert fills[0].checked is False and fills[0].confirmed is False
 
 
+def recheck(asks, outcome_index=YES, market_id="m1"):
+    return pd.DataFrame([{"cycle_id": CYCLE_A, "market_id": market_id,
+                          "outcome_index": outcome_index, "price": p, "size": s}
+                         for p, s in asks])
+
+
+def test_the_recheck_confirms_an_order_still_buyable_under_its_limit():
+    """The level moved a tick, as repricing bots do; the bet was still there."""
+    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
+    fills, _ = sim.execute(st, [order(limit_price=0.40)])
+    sim.confirm_by_recheck(fills, recheck([(0.31, 60.0)]))
+    assert [f.confirmed for f in fills] == [True] and fills[0].checked
+
+
+def test_the_recheck_does_not_confirm_a_bet_that_moved_past_the_limit():
+    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
+    fills, _ = sim.execute(st, [order(limit_price=0.35)])
+    sim.confirm_by_recheck(fills, recheck([(0.36, 500.0)]))
+    assert [f.confirmed for f in fills] == [False] and fills[0].checked
+
+
+def test_the_recheck_needs_the_whole_size_and_confirms_best_levels_first():
+    st = state(books=book(CYCLE_A, [(0.30, 100.0), (0.32, 100.0)]))
+    fills, _ = sim.execute(st, [order(max_usd=100.0, limit_price=0.40)])
+    assert len(fills) == 2
+    taken_first = fills[0].shares
+    sim.confirm_by_recheck(fills, recheck([(0.33, taken_first + 1.0)]))
+    by_rank = sorted(fills, key=lambda f: f.depth_rank)
+    assert [f.confirmed for f in by_rank] == [True, False]
+
+
+def test_without_a_recheck_the_next_cycle_decides():
+    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
+    fills, _ = sim.execute(st, [order()])
+    sim.confirm_by_recheck(fills, pd.DataFrame())
+    assert fills[0].checked is False
+    sim.check_persistence(fills, book(CYCLE_B, [(0.30, 50.0)]))
+    assert fills[0].confirmed is True
+
+
+def test_the_recheck_keys_on_the_token_not_the_market():
+    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
+    fills, _ = sim.execute(st, [order(limit_price=0.40)])
+    sim.confirm_by_recheck(fills, recheck([(0.30, 100.0)], outcome_index=NO))
+    assert fills[0].confirmed is False
+
+
 def test_the_persistence_check_keys_on_the_token_not_the_market():
     """NO ask is not 1 - YES ask, and a NO level at the same number must not
     confirm a YES fill."""
@@ -593,6 +640,15 @@ def test_a_level_that_shrank_between_cycles_is_filled_but_not_confirmed(replay):
     m = sim.metrics(result)
     assert m["fills"] > m["fills_confirmed"]
     assert m["cost_confirmed_usd"] < m["cost_usd"]
+
+
+def test_a_recheck_in_the_replay_decides_before_the_next_cycle_can(replay):
+    """Same world as above, but the first cycle has a recheck showing the 0.30
+    level still deep: the 15-minute shrink no longer un-confirms it."""
+    replay.recheck = lambda cycle_id: (recheck([(0.30, 100.0), (0.40, 100.0)])
+                                       if cycle_id == CYCLE_A else pd.DataFrame())
+    result = sim.run(BuyOnce(), loader=replay)
+    assert all(f.checked and f.confirmed for f in result.fills)
 
 
 def test_the_run_settles_what_has_resolved_since_the_last_cycle(replay):

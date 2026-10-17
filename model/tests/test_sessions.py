@@ -79,3 +79,26 @@ def test_deadline_close_leaves_a_weekly_end_date_alone():
 def test_deadline_close_is_nat_before_the_calendar_starts():
     got = ses.deadline_close(pd.to_datetime(["2000-01-01T00:00:00Z"]).tz_convert(None).values)
     assert pd.isna(pd.Timestamp(got[0]))
+
+
+# ------------------------------------------------- the snapshot session filter
+
+
+@pytest.mark.parametrize("cycle_id, expected", [
+    # October: New York is UTC-4, the session is 13:30Z-20:00Z.
+    ("20261016T133003Z-x", True),
+    ("20261016T131502Z-x", False),
+    ("20261016T200001Z-x", False),   # one second past the inclusive 16:00:00 close
+    ("20261016T200000Z-x", True),
+    # November: UTC-5, the session is 14:30Z-21:00Z. The old 13:30Z-20:00Z
+    # filter kept the first two and dropped the last two.
+    ("20261102T133000Z-x", False),
+    ("20261102T141500Z-x", False),
+    ("20261102T143000Z-x", True),
+    ("20261102T204500Z-x", True),
+    ("20261102T210000Z-x", True),
+    ("20261102T211500Z-x", False),
+])
+def test_in_session_follows_new_york_time_across_the_dst_change(cycle_id, expected):
+    import data
+    assert data.in_session(cycle_id) is expected

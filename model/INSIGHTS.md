@@ -287,6 +287,17 @@ no sign of competing takers; there is a sign of active quoting, so a live
 system has to act on the book within seconds, with option data that is
 itself 15 minutes old.
 
+**Update 2026-10-17: the 40-second recheck.** The collector now reads every
+book a second time ~40 s after the first (`poly_books_recheck`). On the first
+afternoon of it (10-16, 7 cycles, 15 orders), most levels the next-cycle rule
+called lost were the same size re-quoted a tick or two away, in both
+directions: repricing bots following the stock. 11 of 15 orders were still
+fully buyable under their limit at the recheck; 6 at the next snapshot; 4
+passed the strict same-price rule. The four lost even at 40 s all moved
+against the bet. From then on, `sim.confirm_by_recheck` decides confirmation
+where a recheck exists; older cycles keep the next-cycle rule. So confirmed
+PnL before and after 10-16 is not measured the same way.
+
 ### 7.2 The volatility risk premium
 
 **What it is.** Option prices carry the price of insurance. Holders of stock
@@ -397,3 +408,32 @@ the test.
 3. `daily_bars` / `bars_5m` kept an arbitrary version of a bar stored twice,
    so betas changed run to run and factor_neutral traded 115–141 fills on
    identical data. Now newest fetch wins.
+
+### 7.6 Real-time option data would not have helped (measured 2026-10-17)
+
+Cboe's free chain is ~15 minutes delayed (median quote age 912 s against the
+book). The question was whether paying for real-time options would raise
+profit. Stand-in for a real-time feed: price each snapshot's books with the
+**next** snapshot's chain, whose prints date from about this snapshot's book
+time (median quote age ~10 s; a third of market-cycles are up to ~2 minutes
+*ahead* of the book, a small lookahead that can only flatter the real-time
+side). Spot, bars and touch checks are identical; only the vol changes. Both
+sides re-priced with today's engine on the same cycles (every session cycle
+09-16 to 10-15 but each day's last), replayed with the default models, scored
+on markets whose deadline passed by 10-09:
+
+| model | ROI delayed → real-time | PnL | confirmed PnL |
+|---|---|---|---|
+| edge_taker | 22.0% → 18.7% | $5,474 → $5,195 | +$152 → −$226 |
+| direction_balanced | 24.7% → 16.6% | $4,574 → $3,077 | +$255 → −$214 |
+| scenario_hedged | 20.6% → 16.5% | $4,351 → $3,681 | −$15 → −$211 |
+
+The fair value barely moves: median |Δ fair_K| 0.13¢, p90 0.74¢, p99 2.8¢
+over 204,643 market-cycles. That is expected, because the chain only supplies
+volatility; the spot already comes from 5-minute bars at book time, and vol
+moves little in 15 minutes. The PnL gap is then mostly which marginal bets
+cross the bar (real-time took 28 more positions in edge_taker), compounded by
+path dependence, and should be read as noise around zero rather than as
+delayed data being better. **Conclusion: no evidence that premium option data
+pays for itself.** One month, one calm regime; re-test if markets turn
+volatile, when vol moves faster. Scripts: `model/experiments/realtime_options.py` and `realtime_compare.py`.
