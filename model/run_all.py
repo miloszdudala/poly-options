@@ -35,8 +35,7 @@ sys.path.append(str(HERE.parent / "data" / "src"))   # see model/data.py
 
 import data  # noqa: E402
 import sim  # noqa: E402
-from models import (BalancedBook, DirectionBalanced, EdgeTaker, EmpiricalLongshot,  # noqa: E402
-                    FactorNeutral, ScenarioHedged)
+from models import DirectionBalanced, EdgeTaker, ScenarioHedged  # noqa: E402
 
 SUMMARY_COLUMNS = [
     ("model", "model", "{}"),
@@ -56,22 +55,18 @@ SUMMARY_COLUMNS = [
 
 
 def build_models(min_ev: float = 0.03, min_roi: float = 0.08, tag: str = "") -> list:
-    """The four models of MODELS section 5, optionally at a different bar.
+    """The models of MODELS section 5, optionally at a different bar.
 
-    `min_ev` / `min_roi` are MODELS 5.1's thresholds, shared by A, B and
-    B-simple through `sim.candidate_edges`; C has its own shapes and is not
-    re-thresholded here. `tag` is appended to every model's name so a sweep
+    `min_ev` / `min_roi` are MODELS 5.1's thresholds, shared by all three
+    through `sim.candidate_edges`. `tag` is appended to every model's name so a sweep
     (`--min-ev 0.10 --tag ev10`) writes its own reports and ledgers instead of
     overwriting the default run's. The store is what makes this possible at
     any later date: books, fair values and resolutions are all on disk, and a
     replay at a new threshold is a 15-second run, not a new collection.
     """
     models = [EdgeTaker(min_ev=min_ev, min_roi=min_roi),
-              FactorNeutral(min_ev=min_ev, min_roi=min_roi),
-              BalancedBook(min_ev=min_ev, min_roi=min_roi),
               DirectionBalanced(min_ev=min_ev, min_roi=min_roi),
-              ScenarioHedged(min_ev=min_ev, min_roi=min_roi),
-              EmpiricalLongshot()]
+              ScenarioHedged(min_ev=min_ev, min_roi=min_roi)]
     if tag:
         for model in models:
             model.name = f"{model.name}_{tag}"

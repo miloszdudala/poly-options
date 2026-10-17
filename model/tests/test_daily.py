@@ -301,8 +301,8 @@ def busy_run(name):
 def test_the_report_stays_under_a_hundred_and_twenty_lines():
     """The prompt's ceiling, and the reason the reliability tables are one
     table with a model column rather than five tables."""
-    runs = [busy_run(n) for n in ("edge_taker", "factor_neutral", "balanced_book",
-                                  "empirical_longshot", "random_control")]
+    runs = [busy_run(n) for n in ("edge_taker", "direction_balanced", "scenario_hedged",
+                                  "random_control")]
     gaps = pd.DataFrame([{"date": f"2026-09-{d:02d}", "in_session_cycles": 21,
                           "all_runs": 28, "median_gap_min": 17.5,
                           "longest_gap_min": 41.2, "gaps_over_2x": 1,

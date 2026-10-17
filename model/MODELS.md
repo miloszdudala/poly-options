@@ -9,13 +9,11 @@ Last updated 2026-10-09, from the `run_all.py` run of that day after all of
 its fixes.
 
 > **Since 2026-10-09 every YES bought on the option signal pays a 2¢ risk
-> premium.** In `edge_taker`, `factor_neutral`, `balanced_book`,
-> `direction_balanced` and `scenario_hedged` (all through
+> premium.** In `edge_taker`, `direction_balanced` and `scenario_hedged` (all through
 > `sim.candidate_edges`), and in the `opportunities.py` sweep, a YES must clear
 > the EV bar on `fair − 0.02`, not on `fair`. NO is not changed. The 2¢ is the
 > volatility risk premium measured on 31 years of S&P 500 data, not fitted to
-> ours; why it applies to YES and not to NO is in INSIGHTS §7.2.
-> `empirical_longshot` does not use option prices, so it is unaffected. Every
+> ours; why it applies to YES and not to NO is in INSIGHTS §7.2. Every
 > number below is with the premium.
 
 ## How to read the results
@@ -25,8 +23,12 @@ its fixes.
   fee on the side bought, **minus 2¢ on YES**. Bankroll $10,000; caps $150 per
   YES market and $500 per NO market unless a model says otherwise.
 - **Optimistic vs confirmed.** Optimistic counts every fill the harness made
-  against the book it saw. Confirmed counts only fills whose price level was
-  still in the book at the next 15-minute snapshot. Neither is "closed
+  against the book it saw. Confirmed counts only fills a live trader could
+  still have made after deciding. From 2026-10-16 17:00Z that means the bet
+  was still buyable, in full, under its limit at the ~40 s recheck of the same
+  books (`sim.confirm_by_recheck`); on 10-16 that passed 93% of cost, against
+  25% under the old rule on the same fills. Before the recheck existed it
+  means the exact price level was still there at the next 15-minute snapshot. Neither is "closed
   positions": both cover every fill, open or settled. Confirmed is
   conservative. Most unconfirmed quotes were re-quoted by their poster, not
   taken by someone else, and some got cheaper (INSIGHTS §7.1).
@@ -47,9 +49,6 @@ September-deadline markets, all resolved:
 | edge_taker | 180 | $15,652 | +$4,030 | +25.8% | $3,287 | +$257 |
 | direction_balanced | 168 | $10,783 | +$3,483 | +32.3% | $2,452 | **+$350** |
 | scenario_hedged | 162 | $11,826 | +$2,846 | +24.1% | $2,965 | +$90 |
-| factor_neutral | 66 | $2,039 | −$107 | −5.2% | $394 | −$36 |
-| balanced_book | 89 | $4,539 | −$1,277 | −28.1% | $688 | −$214 |
-| empirical_longshot | 147 | $10,240 | −$5,669 | −55.4% | $1,838 | −$692 |
 | random_control | 111 | $12,740 | −$1,270 | −10.0% | $4,449 | −$83 |
 
 Positions opened in October, valued at payout if resolved and at the
@@ -60,23 +59,18 @@ current ask (10-08 close) if open:
 | edge_taker | 73 | $4,511 | $5,568 | +$1,057 | +23% | +$4 |
 | scenario_hedged | 73 | $4,509 | $5,566 | +$1,057 | +23% | +$4 |
 | direction_balanced | 57 | $3,778 | $4,651 | +$873 | +23% | −$22 |
-| factor_neutral | 26 | $442 | $460 | +$18 | +4% | +$1 |
-| balanced_book | 38 | $1,433 | $936 | −$497 | −35% | −$87 |
-| empirical_longshot | 32 | $2,848 | $1,472 | −$1,376 | −48% | −$33 |
 | random_control | 60 | $8,473 | $7,566 | −$908 | −11% | −$276 |
 
 **What the premium changed (September-deadline markets).** Optimistic PnL rose
 for every option model: edge_taker +$3,396 → +$4,030, direction_balanced
-+$2,467 → +$3,483, scenario_hedged +$2,100 → +$2,846, balanced_book −$1,647
-→ −$1,277. Confirmed PnL fell: +$411 → +$257, +$508 → +$350, +$292 → +$90.
++$2,467 → +$3,483, scenario_hedged +$2,100 → +$2,846. Confirmed PnL fell: +$411 → +$257, +$508 → +$350, +$292 → +$90.
 The cause is a handful of YES bets that were both confirmed and winners; the
 premium dropped them. Confirmed YES is a tiny sample ($160–440 of cost per
 model), so this neither proves nor refutes the premium. October decides. The
 random control changed only because its activity is set from edge_taker's.
 
 Whole window, worst single day (marked): edge_taker −$3,457,
-direction_balanced −$2,140, scenario_hedged −$2,196, empirical_longshot
-−$2,028, balanced_book −$1,570, factor_neutral −$762, random_control
+direction_balanced −$2,140, scenario_hedged −$2,196, random_control
 −$6,453.
 
 **The pattern in every model:** NO bets make money and YES bets lose. A random
@@ -90,8 +84,8 @@ the bar each side has to clear.
 All share the option-implied signal (`sim.candidate_edges`): trade where
 `min(fair_K, fair_atm)` beats price plus fee by EV ≥ 3¢ and ROI ≥ 8%,
 **with YES paying the 2¢ risk premium on top**, never
-`deep_otm`, chainless or unrepaired-earnings markets. empirical_longshot and
-the control are the exceptions. They differ in which candidates they keep and
+`deep_otm`, chainless or unrepaired-earnings markets. The control is the
+exception. They differ in which candidates they keep and
 how they size them.
 
 ### 5.1 `edge_taker`: the baseline
@@ -108,30 +102,19 @@ monthlies, −$1,590. Largest exposure is EWY, whose option chain is thin.
 **Verdict:** the signal is good on NO and bad on YES. The real question is
 how much of the cheap NO could have been bought (INSIGHTS §7.1).
 
-### 5.2 `factor_neutral`: hedged with deltas and betas
+### Removed 2026-10-17
 
-**Does:** keeps the book's net beta-dollar-delta (sensitivity to SPY) within
-±5% of bankroll, per-direction cap 25%, per-ticker 8%, and a variance budget.
-Prefers YES pairs on both sides of one ticker (a straddle).
+Three models were dropped as not making sense, with their code and tests
+(git history has both). Their September results stay in the old reports.
 
-**Result:** the band rejects most candidates, so only $2.3k was deployed in
-September. Single bets made money and the straddles lost: they are long
-volatility, and September was calm. Flat overall.
-
-**Verdict:** too constrained to matter, and its straddle preference adds the
-exposure that lost. Superseded by the two models below.
-
-### 5.2b `balanced_book`: four quadrants in equal dollars
-
-**Does:** no quadrant (YES hit_up, YES hit_down, NO hit_up, NO hit_down) may
-exceed the smallest by more than $500 of cost.
-
-**Result:** before the premium, NO +$428 and YES −$2,076 in September, with
-09-28 alone −$2,026. With it, −$1,277 overall. To keep
-buying NO it had to buy YES.
-
-**Verdict:** equal dollars are not equal risk. $500 of NO at 93¢ earns $37 in
-a calm week, $500 of YES at 30¢ loses $500. Kept for comparison only.
+- **5.2 `factor_neutral`** (beta-dollar-delta band): rejected most
+  candidates, and its straddle preference added the long-vol exposure that
+  lost in a calm month. Flat.
+- **5.2b `balanced_book`** (four quadrants in equal dollars): equal dollars
+  are not equal risk, so to keep buying NO it had to buy YES. −28%.
+- **5.3 `empirical_longshot`** (historical touch rates instead of options):
+  learned from a far more volatile 2021–2025; its YES "middle" bets lost
+  −$5,732. −55%.
 
 ### 5.2c `direction_balanced`: up against down
 
@@ -163,20 +146,6 @@ scenarios. Smallest worst day of the profitable models.
 **Verdict:** a working hedge that costs some profit, which is how a hedge
 should behave. It doesn't model a path that touches both sides, and assumes
 every stock moves together.
-
-### 5.3 `empirical_longshot`: no options
-
-**Does:** uses the historical touch frequency instead of option prices
-(sessions before 2026-02-01, distance in EWMA sigmas). Two shapes:
-
-- **sell longshots:** NO when YES ≤ 12¢ and history says ≤ half the price;
-- **buy the middle:** YES at 15–50¢ when history beats cost by ≥ 4¢.
-
-**Result:** the longshot shape fired 8 times (+$63). The middle shape made
-139 YES bets, −$5,732: it predicted 40% and 19% touched. The history it learns
-from (2021–2025) was far more volatile than September.
-
-**Verdict:** worst model. It is a YES buyer, which is the side that loses.
 
 ### `random_control`
 

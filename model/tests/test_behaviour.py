@@ -40,7 +40,6 @@ MAX_FAIR_JUMP_SHARE = 0.01        # share of consecutive pairs allowed past it
 MAX_REPRICE_DIFF = 1e-3           # store vs a fresh reprice of the same cycle
 MAX_IV_DISAGREEMENT = 0.25        # share of liquid strikes past 0.01 vs Cboe
 MAX_VENUE_DISAGREEMENT = 0.10     # touched-on-our-bars vs resolved-YES-at-the-venue
-BAND_TOLERANCE = 1.10             # factor_neutral's entry band, with 10% slack
 EQUITY_EXCLUDED = {"DXY", "WTI", "XAUUSD", "XAGUSD", "NG"}
 # Dates known to be thin, with why. A new entry needs a reason, not a shrug.
 KNOWN_THIN_DATES = {
@@ -56,11 +55,8 @@ YES, NO = 0, 1
 CAPS_BY_MODEL = {
     # (cap_yes, cap_no, ticker_cap_frac, direction_cap_frac) - MODELS 4.4 and 5
     "edge_taker": (150.0, 500.0, 1.00, 1.00),
-    "factor_neutral": (150.0, 500.0, 0.08, 0.25),
-    "balanced_book": (150.0, 500.0, 0.08, 1.00),
     "direction_balanced": (150.0, 500.0, 0.10, 1.00),
     "scenario_hedged": (150.0, 500.0, 0.12, 1.00),
-    "empirical_longshot": (150.0, 500.0, 0.10, 0.30),
     "random_control": (150.0, 500.0, 0.10, 0.40),
 }
 BANKROLL = 10_000.0
@@ -192,7 +188,7 @@ def test_option_quotes_are_the_expected_age_in_every_cycle(fair, fills):
     reversed_ = by_cycle[by_cycle < 0]
     per_date = reversed_.groupby(reversed_.index.map(data.cycle_date)).size()
     assert (per_date <= 1).all(), f"more than one chain-after-book cycle on a date: {per_date.to_dict()}"
-    option = fills[fills["model"].str.startswith(("edge_taker", "factor_neutral", "balanced_book", "direction_balanced", "scenario_hedged"))]
+    option = fills[fills["model"].str.startswith(("edge_taker", "direction_balanced", "scenario_hedged"))]
     ages = fair.set_index(["cycle_id", "market_id"])["quote_age_s"]
     per_fill = [ages.get((c, m), np.nan) for c, m in zip(option["cycle_id"], option["market_id"])]
     contaminated = option[np.asarray(per_fill, dtype=float) < 0]
@@ -365,7 +361,7 @@ def test_an_earnings_gap_is_always_repaired_or_excluded(fair, fills):
         pytest.skip("no earnings-gap market-cycles yet")
     unrepaired = gap[gap["vol_source"] != "pre_earnings_flat"]
     keyed = set(zip(unrepaired["cycle_id"], unrepaired["market_id"]))
-    option_models = fills[fills["model"].isin(["edge_taker", "factor_neutral", "balanced_book", "direction_balanced", "scenario_hedged"])]
+    option_models = fills[fills["model"].isin(["edge_taker", "direction_balanced", "scenario_hedged"])]
     traded = option_models[[(c, m) in keyed for c, m in
                             zip(option_models["cycle_id"], option_models["market_id"])]]
     assert traded.empty, f"{len(traded)} option-signal fills on an unrepaired earnings gap"
@@ -493,7 +489,7 @@ def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
     one, the market was neither deep OTM nor chainless, and the price paid
     cleared MODELS 5.1's EV and ROI bars against that fair."""
     keyed = _fair_at(fair)
-    option = fills[fills["model"].str.startswith(("edge_taker", "factor_neutral", "balanced_book", "direction_balanced", "scenario_hedged"))]
+    option = fills[fills["model"].str.startswith(("edge_taker", "direction_balanced", "scenario_hedged"))]
     if option.empty:
         pytest.skip("no option-signal fills yet")
     bad = []
@@ -516,72 +512,6 @@ def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
         if win - cost < ev_bar - 1e-9 or (win - cost) / cost < roi_bar - 1e-9:
             bad.append((f.model, f.market_id, f"win {win:.3f} cost {cost:.3f}"))
     assert not bad, f"{len(bad)} option-signal fills that did not clear the bar: {bad[:5]}"
-
-
-def test_empirical_longshot_traded_only_its_two_shapes(fills, fair, asks):
-    """C: NO only when the YES ask was at most 12c, the empirical frequency at
-    most half of it and the option engine not above the ask; YES only between
-    15c and 50c with the empirical frequency at least 4c over cost."""
-    c = fills[fills["model"].str.startswith("empirical_longshot")]
-    if c.empty:
-        pytest.skip("no empirical_longshot fills yet")
-    keyed = _fair_at(fair)
-    best = (asks[asks["depth_rank"] == 0]
-            .set_index(["cycle_id", "market_id", "outcome_index"])["price"])
-    bad = []
-    for f in c.itertuples():
-        row = _fair_row(keyed, f.cycle_id, f.market_id)
-        if row is None or f.fair_source != "empirical" or abs(float(row["fair_empirical"]) - f.fair) > 1e-9:
-            bad.append((f.market_id, "fair is not the empirical frequency")); continue
-        emp = f.fair
-        if f.outcome_index == NO:
-            yes_ask = float(best.get((f.cycle_id, f.market_id, YES), np.nan))
-            fair_k = float(row["fair_K"])
-            if not (yes_ask <= 0.12 and emp <= 0.5 * yes_ask
-                    and not (np.isfinite(fair_k) and fair_k > yes_ask)):
-                bad.append((f.market_id, f"NO with yes_ask {yes_ask}, emp {emp:.3f}, fair_K {fair_k:.3f}"))
-        else:
-            cost = f.price + 0.04 * min(f.price, 1 - f.price)
-            if not (0.15 <= f.price <= 0.50 and emp - cost >= 0.04 - 1e-9):
-                bad.append((f.market_id, f"YES at {f.price} with emp {emp:.3f}"))
-    assert not bad, f"{len(bad)} fills outside C's two shapes: {bad[:5]}"
-
-
-def test_factor_neutral_is_inside_its_beta_band_whenever_it_trades(fills, marks):
-    """MODELS 5.2 as implemented (P4 deviation 4): an entry band. At every cycle
-    in which B filled, the book it left behind is within 5% of bankroll of
-    beta-dollar-delta, with 10% tolerance for the projection."""
-    b_fills = fills[fills["model"] == "factor_neutral"]
-    if b_fills.empty:
-        pytest.skip("factor_neutral has not filled yet")
-    b_marks = marks[marks["model"] == "factor_neutral"]
-    net = b_marks.groupby("cycle_id")["beta_dollar_delta"].sum()
-    at_fill = net.reindex(sorted(set(b_fills["cycle_id"]))).dropna()
-    band = 0.05 * BANKROLL * BAND_TOLERANCE
-    over = at_fill[at_fill.abs() > band]
-    assert over.empty, f"factor_neutral outside its band right after filling: {over.round().to_dict()}"
-
-
-def test_balanced_book_never_grows_a_quadrant_past_the_smallest_plus_slack(fills, marks):
-    """MODELS 5.2b: after its fills in a cycle, the quadrant it filled into is
-    at most the smallest quadrant plus $500."""
-    bb_fills = fills[fills["model"] == "balanced_book"]
-    if bb_fills.empty:
-        pytest.skip("balanced_book has not filled yet")
-    bb_marks = marks[marks["model"] == "balanced_book"].copy()
-    bb_marks["quadrant"] = [sim.quadrant_of(ct, int(o)) for ct, o in
-                            zip(bb_marks["contract_type"], bb_marks["outcome_index"])]
-    bad = []
-    for cycle_id, group in bb_fills.groupby("cycle_id"):
-        totals = bb_marks[bb_marks["cycle_id"] == cycle_id].groupby("quadrant")["cost_usd"].sum()
-        totals = totals.reindex(["long_yes", "short_yes", "long_no", "short_no"], fill_value=0.0) \
-            if set(totals.index) <= {"long_yes", "short_yes", "long_no", "short_no"} else totals
-        smallest = float(totals.min()) if len(totals) else 0.0
-        for ct, o in set(zip(group["contract_type"], group["outcome_index"])):
-            q = sim.quadrant_of(ct, int(o))
-            if float(totals.get(q, 0.0)) > smallest + 500.0 + 1.0:
-                bad.append((cycle_id, q, round(float(totals.get(q, 0.0)), 2), round(smallest, 2)))
-    assert not bad, f"balanced_book quadrant past smallest + slack after filling: {bad[:5]}"
 
 
 def test_the_random_control_carries_no_forecast(fills):
