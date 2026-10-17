@@ -140,6 +140,10 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("failed_at_utc", S),
     ]),
 }
+# The second read of the same books, seconds after the first, under the same
+# cycle_id (jobs._recheck_books): did a level a taker saw survive long enough
+# to be taken? Same columns, so the two join level for level.
+SCHEMAS["poly_books_recheck"] = SCHEMAS["poly_books"]
 
 
 def coerce(table: str, rows: list[dict]) -> tuple[list[dict], pa.Schema | None]:

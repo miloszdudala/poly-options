@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import traceback
 
 from config import ensure_dirs, markets_cfg, underlyings
@@ -121,6 +122,29 @@ def job_snapshot(run: Run) -> None:
         run.status = "truncated"
         return
 
+    # The second read of the same books, ~30 s on, before anything slower.
+    # Options took 110 s on 2026-10-16 17:00Z, which put a recheck placed after
+    # them two minutes out: longer than a trader needs to act.
+    _recheck_books(run, markets, steady_seconds())
+
+    if run.out_of_time():
+        run.note("deadline hit after the book recheck: options and kalshi skipped")
+        run.status = "truncated"
+        return
+
+    # Options before the hourly Kalshi pass (~90 s), so the chain lands as
+    # close to the books it is compared with as it can.
+    if is_regular_hours():
+        run.counts.update(collect_options(run.http, underlyings(with_options_only=True),
+                                          run.cycle_id))
+    else:
+        run.note("outside US regular hours: options skipped")
+
+    if run.out_of_time():
+        run.note("deadline hit after options: kalshi skipped")
+        run.status = "truncated"
+        return
+
     last_kalshi = (read_meta("last_kalshi") or {}).get("at_utc")
     ok, why = should_run_kalshi(run.started, parse_iso(last_kalshi))
     if ok:
@@ -130,18 +154,35 @@ def job_snapshot(run: Run) -> None:
     else:
         run.note(f"kalshi cadence: {why}")
 
-    if run.out_of_time():
-        run.note("deadline hit after kalshi: options skipped")
-        run.status = "truncated"
-        return
-
-    if is_regular_hours():
-        run.counts.update(collect_options(run.http, underlyings(with_options_only=True),
-                                          run.cycle_id))
-    else:
-        run.note("outside US regular hours: options skipped")
-
     _intraday_discovery(run)
+
+
+def _pause(seconds: float) -> None:
+    """`time.sleep`, behind a name the tests can stub without stubbing it for
+    every module in the process."""
+    time.sleep(seconds)
+
+
+def _recheck_books(run: Run, markets: list[dict], books_done: float) -> None:
+    """Read every Polymarket book again into `poly_books_recheck`, at least
+    `recheck_books_after_seconds` after the first read finished.
+
+    The replay fills against the first read. A live trader sees the same book,
+    prices it and sends an order, which takes seconds; the recheck says which
+    levels were still there by then. Before this table the only check was the
+    next snapshot, 15 minutes on, which is far longer than a trader needs and
+    counts a level as lost when its poster merely re-quoted it.
+    """
+    from poly_books import collect_books
+
+    delay = float(markets_cfg()["schedule"].get("recheck_books_after_seconds", 0) or 0)
+    if delay <= 0:
+        return
+    wait = delay - (steady_seconds() - books_done)
+    if wait > 0:
+        _pause(wait)
+    stats, _ = collect_books(run.http, markets, run.cycle_id, table="poly_books_recheck")
+    run.counts.update({f"recheck_{k}": v for k, v in stats.items()})
 
 
 def _intraday_discovery(run: Run) -> None:

@@ -149,3 +149,8 @@ schedule:
   # was collected is written. 0 disables. The daily job is never deadlined; it
   # legitimately takes ~17 minutes.
   snapshot_deadline_seconds: 600
+  # Every snapshot reads the Polymarket books a second time, at least this
+  # many seconds after the first read finished, into poly_books_recheck. A
+  # level still there is one a live trader could have taken after deciding;
+  # one gone was taken or pulled first. ~13 s and ~5 GB/yr. 0 disables.
+  recheck_books_after_seconds: 30

@@ -3,10 +3,15 @@
 Read-only data collection for comparing Polymarket (and Kalshi) contracts on US
 stock prices with probabilities implied by listed options.
 
-**This repository collects data only.** No accounts, no API keys, no orders.
-Modelling and signal logic belong in `model/`: `model/MODELS.md` describes
-each model and its results, `model/INSIGHTS.md` the engine, the accounting
-and what the data has taught us.
+Three sections, kept apart on purpose:
+
+- **`data/`** (this README) collects. No accounts, no API keys, no orders.
+- **`model/`** replays the signal over the collected data: `model/MODELS.md`
+  describes each model and its results, `model/INSIGHTS.md` the engine, the
+  accounting and what the data has taught us.
+- **`live/`** trades it with real money, only when you start it. See
+  `live/README.md`. It reads the collector's store and shares no code with
+  `model/`.
 
 Because liquidity is thin, the **full order book** (every level, both sides, both
 outcome tokens) is stored at every snapshot. Mid, last trade and best bid/ask are
@@ -249,10 +254,19 @@ queries that remember to say so.
 
 ### Tables
 
-`poly_markets`, `poly_books`, `poly_price_history`,
+`poly_markets`, `poly_books`, `poly_books_recheck`, `poly_price_history`,
 `poly_unparsed`, `kalshi_markets`, `kalshi_books`, `option_quotes`,
 `underlying_quotes`, `underlying_bars`, `rates`, `dividends`, `earnings`,
 `resolutions`, `runs`, `failures`.
+
+`poly_books_recheck` (from 2026-10-16 17:00Z) is a second read of every
+Polymarket book in the same snapshot, at least `recheck_books_after_seconds`
+(30) after the first read finished, under the same `cycle_id`. A level still
+there is one a live trader could have taken after deciding; before it, the
+only check was the next snapshot, 15 minutes on. Order within a snapshot:
+books, recheck, options, Kalshi (hourly), discovery. Options used to come
+after Kalshi; they now land closer to the books, and ~45 s later than before
+on ticks without Kalshi.
 
 `poly_price_history` fetches a token's whole hourly history the first time it
 sees it (`interval=max`) and one day after that; before 2026-09-18 it only

@@ -103,7 +103,10 @@ def order(monkeypatch):
     monkeypatch.setattr(jobs, "should_run_kalshi", lambda *a: (True, "due"))
     monkeypatch.setattr(jobs, "is_regular_hours", lambda *a, **k: True)
     monkeypatch.setattr(poly_books, "collect_books",
-                        lambda *a, **k: (seq.append("books"), ({}, {}))[1])
+                        lambda *a, table="poly_books", **k: (
+                            seq.append("books" if table == "poly_books" else "recheck"),
+                            ({}, {}))[1])
+    monkeypatch.setattr(jobs, "_pause", lambda s: None)
     monkeypatch.setattr(kalshi, "collect", lambda *a, **k: (seq.append("kalshi"), {})[1])
     monkeypatch.setattr(options, "collect_options", lambda *a, **k: (seq.append("options"), {})[1])
     return seq, stamps
@@ -115,7 +118,7 @@ def test_discovery_runs_after_every_book_phase(order, monkeypatch):
                         lambda *a, **k: (seq.append("discover"), ([{"market_id": "1"}], True))[1])
     run = jobs.Run("snapshot")
     jobs.job_snapshot(run)
-    assert seq == ["books", "kalshi", "options", "discover"]
+    assert seq == ["books", "recheck", "options", "kalshi", "discover"]
     assert "last_discovery" in stamps and run.status == "ok"
 
 

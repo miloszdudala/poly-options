@@ -18,7 +18,7 @@ import util
 @pytest.fixture
 def stub(monkeypatch):
     """Neutralise every network phase; record which ones ran."""
-    ran = {"books": 0, "kalshi": 0, "options": 0}
+    ran = {"books": 0, "kalshi": 0, "options": 0, "tables": [], "slept": []}
     monkeypatch.setattr(jobs, "_markets_for_books", lambda run: [])
     import poly_discover
     import poly_events
@@ -27,8 +27,13 @@ def stub(monkeypatch):
     monkeypatch.setattr(poly_events, "refresh_events", lambda *a, **k: {})
     monkeypatch.setattr(jobs, "write_meta", lambda *a, **k: None)
     monkeypatch.setattr(jobs, "read_meta", lambda *a, **k: None)
-    monkeypatch.setattr(poly_books, "collect_books",
-                        lambda *a, **k: (ran.__setitem__("books", ran["books"] + 1), ({}, {}))[1])
+
+    def books(*a, table="poly_books", **k):
+        ran["books"] += 1
+        ran["tables"].append(table)
+        return {}, {}
+    monkeypatch.setattr(poly_books, "collect_books", books)
+    monkeypatch.setattr(jobs, "_pause", lambda s: ran["slept"].append(s))
     monkeypatch.setattr(kalshi, "collect",
                         lambda *a, **k: (ran.__setitem__("kalshi", ran["kalshi"] + 1), {})[1])
     import options
@@ -43,7 +48,7 @@ def test_kalshi_guard_is_unpacked_not_truthiness_tested(stub, monkeypatch):
     run = jobs.Run("snapshot")
     jobs.job_snapshot(run)
     assert stub["kalshi"] == 0, "a (False, reason) tuple must not run Kalshi"
-    assert stub["books"] == 1 and stub["options"] == 1
+    assert stub["books"] == 2 and stub["options"] == 1   # first read + recheck
 
 
 def test_kalshi_runs_when_the_guard_says_so(stub, monkeypatch):
@@ -69,6 +74,23 @@ def test_no_deadline_means_no_truncation(stub, monkeypatch):
     assert run.out_of_time() is False
     jobs.job_snapshot(run)
     assert run.status == "ok"
+
+
+def test_books_are_read_twice_the_second_time_into_the_recheck_table(stub, monkeypatch):
+    monkeypatch.setattr(jobs, "should_run_kalshi", lambda *a: (False, "not a boundary"))
+    jobs.job_snapshot(jobs.Run("snapshot"))
+    assert stub["tables"] == ["poly_books", "poly_books_recheck"]
+    # The stubbed phases take no time, so the job waits out the full delay.
+    assert stub["slept"] and 29 < stub["slept"][0] <= 30
+
+
+def test_recheck_can_be_switched_off(stub, monkeypatch):
+    monkeypatch.setattr(jobs, "should_run_kalshi", lambda *a: (False, "not a boundary"))
+    cfg = jobs.markets_cfg()
+    monkeypatch.setitem(cfg["schedule"], "recheck_books_after_seconds", 0)
+    monkeypatch.setattr(jobs, "markets_cfg", lambda: cfg)
+    jobs.job_snapshot(jobs.Run("snapshot"))
+    assert stub["tables"] == ["poly_books"]
 
 
 def test_http_stops_retrying_past_the_deadline():

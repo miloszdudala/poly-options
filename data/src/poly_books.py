@@ -70,8 +70,13 @@ def _levels(book: dict, token_meta: dict, cycle_id: str, fetched_at: str) -> lis
     return rows
 
 
-def collect_books(http: Http, markets: list[dict], cycle_id: str) -> dict:
-    """Fetch full books for both outcome tokens of every tracked market."""
+def collect_books(http: Http, markets: list[dict], cycle_id: str,
+                  table: str = "poly_books") -> dict:
+    """Fetch full books for both outcome tokens of every tracked market.
+
+    `table="poly_books_recheck"` is the second read of the same books seconds
+    later (jobs._recheck_books), written under the same cycle_id.
+    """
     cfg = markets_cfg()["polymarket"]
     base = cfg["clob_base"]
     batch_size = cfg["books_batch_size"]
@@ -151,7 +156,7 @@ def collect_books(http: Http, markets: list[dict], cycle_id: str) -> dict:
         log.warning("no book returned for %d tokens", len(missing))
 
     if all_rows:
-        write_table("poly_books", all_rows)
+        write_table(table, all_rows)
 
     # The book payload carries its own last_trade_price, which is written onto
     # every level row as book_last_trade_price - so there is no separate
