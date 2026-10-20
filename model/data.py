@@ -27,6 +27,7 @@ from __future__ import annotations
 import datetime as dt
 import functools
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -64,8 +65,23 @@ def _con():
     return duckdb.connect()
 
 
-def _q(sql: str) -> pd.DataFrame:
-    return _con().sql(sql).df()
+def _q(sql: str, tries: int = 8) -> pd.DataFrame:
+    """Run a query, waiting out a Parquet file the collector is still writing.
+
+    The collector writes a file every 15 minutes; a glob that lands mid-write
+    sees a file with no footer yet and DuckDB refuses the whole query
+    (run_all crashed on one on 2026-10-19). A complete file appears within
+    seconds, so a short wait and a re-read is enough.
+    """
+    import duckdb
+
+    for attempt in range(tries):
+        try:
+            return _con().sql(sql).df()
+        except duckdb.InvalidInputException:
+            if attempt == tries - 1:
+                raise
+            time.sleep(10)
 
 
 def cycle_date(cycle_id: str) -> str:

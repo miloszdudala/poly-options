@@ -120,7 +120,15 @@ Three models were dropped as not making sense, with their code and tests
 
 **Does:** every bet says "the stock goes up" (YES hit_up, NO hit_down) or
 "goes down" (YES hit_down, NO hit_up). The two sides may differ by at most
-$500 of cost. Per-ticker cap 10%.
+10% of the book's cost ($150 while the book is small). While the book is past
+that, a bet on the light side may come in at EV >= 0 instead of 3c, up to
+what levels the two sides. Per-ticker cap 10%.
+
+**Changed 2026-10-19.** The limit was a fixed $500, a sixth of the ~$3k
+book these markets allow, so it almost never applied: 99% of its money was in
+edge_taker's positions. Making it relative but only trimming orders kept
+the median imbalance at 11%, yet one side resolving left the worst 5% of
+cycles 64% one-sided. Hedge legs bring that to 7% median, 22% worst 5%.
 
 **Result:** best confirmed PnL in September (+$350 with the premium, +$508
 without) and best ROI (+32%). Worst day a third smaller
@@ -130,22 +138,56 @@ direction without being pushed into YES.
 **Verdict:** the best of the hedged models so far. It does not hedge a big
 move: NO on both sides of a stock loses whichever way the stock jumps.
 
-### 5.2d `scenario_hedged`: balance what positions pay
+### 5.2d `scenario_hedged`: limit the book's risk, measured the way it is
 
-**Does:** eleven scenarios: every stock moves −3, −2, −1.5, −1, −0.5, 0, +0.5,
-+1, +1.5, +2 or +3 of its own sigmas, all together, and 0 is "nothing moves".
-Each position pays 1 or 0 per share in each scenario, from its distance to
-the barrier `ln(B/S) / (sigma_atm·√T)`. An order is trimmed to the largest
-size that keeps every scenario's book PnL above −$1,000. Per-ticker cap 12%.
+**Does:** prices every bet in 49 scenarios: a volatility multiplier `k`
+(moves are k times what options priced; log-sd 0.21) times a market drift
+`mu` (sd 0.39 implied sigmas), each on 7 points out to ±3 sd, weighted by a
+normal density. A bet's win probability in a scenario comes from its own
+model probability: `q = 2N(−a)` gives the barrier distance `a`, and the touch
+probability becomes `2N(−(a ∓ mu)/k)`. Two limits, relative to the cost
+held: the book's **standard deviation ≤ 8%** (variance across scenarios, plus
+each ticker × type × side's coin flip with the bets inside it perfectly
+correlated), and **no scenario's expected PnL below −10%** ($50 floors while
+the book is small). A book that drifted out may not drift further; while out,
+a bet that brings it back may come in at EV ≥ 0. Per-ticker cap 12%.
 
-**Result:** September +$2,846 (+$90 confirmed) with the premium, +$2,100
-(+$292) without. It bought the same YES as
-edge_taker and less NO, because a pile of NO is what loses in the big-move
-scenarios. Smallest worst day of the profitable models.
+**Why it was rebuilt (2026-10-19).** The old version moved every stock the
+same number of sigmas in one direction, with a −$1,000 worst-case limit. It
+made +81% in the week of 09-21 and lost in another, because it measured the
+wrong risk:
+- **Volatility is the common factor, not direction.** Across all markets,
+  touches came in at 0.72× the model's rate in the week of 09-21 and 1.59× in
+  the week of 10-12 (k = 0.77 to 1.33). A calm week pays every NO at once,
+  above and below the price. The old grid treated NO above + NO below as a
+  hedge of each other.
+- **Same-ticker bets are one bet.** EWY hit_up NO at 188/192/193/194 win or
+  lose together. Counted that way, every week of edge_taker's and this
+  model's ROI is within ±1.6 sd of what the bets implied; counted as
+  independent, 09-21 was +2.8 sd. So the swings were the real risk of the
+  bets, not a bookkeeping error.
+- **Cheap NO is a lopsided coin.** edge_taker's average NO cost 36c: −100% or
+  +180%. A worst-case limit does not see that spread at all.
+A limit on the range (best minus worst scenario) was tried and dropped: one
+cheap NO used the whole range. A limit on independent variance alone was
+tried and dropped: 09-21 still came out 2.7 sd high.
 
-**Verdict:** a working hedge that costs some profit, which is how a hedge
-should behave. It doesn't model a path that touches both sides, and assumes
-every stock moves together.
+**Result (09-16 .. 10-16, deadline-passed markets, ROI by week of entry):**
+
+| sd limit | bet | settled PnL | weekly ROI | each week vs its own risk |
+|---|---:|---:|---|---|
+| none (edge_taker) | $27.7k | +$5,984 | +24 +48 +6 +14 −11 | −1.3 .. +1.6 sd |
+| 25% | $16.1k | +$2,204 | +5 +50 −2 +10 +12 | −0.8 .. +2.1 sd |
+| 15% | $10.2k | +$1,346 | +6 +33 +4 +7 −50 | −1.9 .. +1.7 sd |
+| **8% (default)** | $3.3k | +$246 | **+6 +17 +13 +8 +6** | **−0.2 .. +0.2 sd** |
+
+**Verdict:** at 8% it is balanced: no week far from +10%, every week as the
+model's own probabilities said. The price is size. The edge is mostly in
+cheap NO clustered on a few tickers, which is what the limit cuts, and the
+hedge that would let size back in, a YES that pays in a wild week, rarely
+clears EV ≥ 0: hedge legs were 21% of its spend and mostly NO elsewhere, not
+YES. Five weeks, one of them calm, fitted the factor sizes too; re-fit them
+on a longer history before trusting the 8%.
 
 ### `random_control`
 

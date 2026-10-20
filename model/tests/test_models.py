@@ -6,6 +6,8 @@ factor_neutral, balanced_book and empirical_longshot were removed on
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -186,31 +188,97 @@ def test_direction_balanced_opens_up_once_the_other_side_is_hold_dir():
     assert sum(o.max_usd for o in orders) == pytest.approx(900.0)
 
 
+def test_direction_balanced_buys_the_light_side_below_the_bar():
+    """$600 of "down" and nothing "up": a hit_up YES with 1.2c of EV misses
+    the 3c bar but comes in as a hedge, at most up to the $600 gap."""
+    portfolio = sim.Portfolio(DirectionBalanced.params)
+    _hold_dir(portfolio, "n0", "hit_up", NO, 600.0)
+    specs = [(market("u0", "T0", "hit_up", yes_ask=0.20),
+              priced("u0", "T0", "hit_up", fair=0.24))]
+    orders = DirectionBalanced().propose(
+        world(specs, params=DirectionBalanced.params, portfolio=portfolio))
+    assert [o.reason for o in orders] == ["direction_balanced_hedge"]
+    assert orders[0].max_usd <= 600.0
+    none = DirectionBalanced(hedge_min_ev=None).propose(
+        world(specs, params=DirectionBalanced.params, portfolio=portfolio))
+    assert none == []
+
+
 # --------------------------------------------------------- scenario_hedged
 
 
-def test_scenario_payoffs_follow_the_barrier():
-    from models.scenario_hedged import SCENARIOS, payoff
-    up_yes = payoff("hit_up", YES, 1.0)
-    assert up_yes.tolist() == [float(z >= 1.0) for z in SCENARIOS]
-    assert (payoff("hit_up", NO, 1.0) == 1 - up_yes).all()
-    assert payoff("hit_down", YES, -1.0)[0] == 1.0 and payoff("hit_down", YES, -1.0)[-1] == 0.0
+def test_scenarios_reproduce_the_model_probability_at_the_centre():
+    """k = 1, mu = 0 is the scenario where the options were right."""
+    from models.scenario_hedged import K, MU, touch_probs
+    centre = int(np.argmin(np.abs(K - 1.0) + np.abs(MU)))
+    for q in (0.05, 0.3, 0.7):
+        assert touch_probs(q, up=True)[centre] == pytest.approx(q, abs=1e-9)
+
+
+def test_a_calm_week_pays_no_on_both_sides():
+    """Low vol (k < 1) lowers the touch probability above and below the price:
+    NO on hit_up and NO on hit_down win together, which is why they do not
+    hedge each other."""
+    from models.scenario_hedged import K, MU, win_probs
+    calm = int(np.argmin(np.abs(K - K.min()) + np.abs(MU)))
+    up_no = win_probs(0.4, "hit_up", "NO")
+    down_no = win_probs(0.4, "hit_down", "NO")
+    assert up_no[calm] > 0.6 + 0.05 and down_no[calm] > 0.6 + 0.05
+
+
+def test_drift_moves_up_and_down_barriers_opposite_ways():
+    from models.scenario_hedged import K, MU, touch_probs
+    rally = int(np.argmin(np.abs(K - 1.0) + np.abs(MU - MU.max())))
+    assert touch_probs(0.3, up=True)[rally] > 0.3 > touch_probs(0.3, up=False)[rally]
+
+
+def test_same_ticker_bets_count_as_one_coin_flip():
+    """Two $50 NO on the same ticker and side are one bet: their spread adds,
+    on two tickers it adds in quadrature."""
+    from models.scenario_hedged import Book, win_probs
+    w = win_probs(0.5, "hit_up", "NO") * 0          # no scenario spread: coin flips only
+    one = Book().plus(("A", "hit_up", 1), 100, 50, w, 0.5).plus(("A", "hit_up", 1), 100, 50, w, 0.5)
+    two = Book().plus(("A", "hit_up", 1), 100, 50, w, 0.5).plus(("B", "hit_up", 1), 100, 50, w, 0.5)
+    assert one.sd() == pytest.approx(100.0) and two.sd() == pytest.approx(100.0 / math.sqrt(2))
+
+
+def test_scenario_hedged_trims_a_bet_to_the_sd_limit():
+    """$100 of NO at 25c with a 50/50 model probability: sd $200, so a $50 limit
+    lets a quarter of it in."""
+    from models.scenario_hedged import Book
+    model = ScenarioHedged(loss_budget=1e9, sd_budget=50.0, sd_frac=0.0)
+    wins = np.full(49, 0.5)
+    t = model._largest_fraction(Book(), ("A", "hit_up", 1), 400.0, 100.0, wins, 0.5)
+    assert t == pytest.approx(0.25, rel=1e-6)
 
 
 def test_scenario_hedged_trims_a_bet_to_the_loss_budget():
-    """A YES loses its whole cost in every scenario that does not reach it, so
-    with a $100 budget and nothing held it can put in $100 and no more."""
-    model = ScenarioHedged(loss_budget=100.0)
-    t = model._largest_scale(np.zeros(3), np.array([-150.0, -150.0, 300.0]))
+    """A bet worth nothing in one scenario loses its cost there."""
+    from models.scenario_hedged import Book
+    model = ScenarioHedged(loss_budget=100.0, loss_frac=0.0, sd_frac=None)
+    wins = np.ones(49); wins[0] = 0.0
+    t = model._largest_fraction(Book(), ("A", "hit_up", 0), 1_000.0, 150.0, wins, 0.9)
     assert t == pytest.approx(100.0 / 150.0)
+    assert model.budget(0.0) == 100.0
 
 
 def test_scenario_hedged_lets_a_hedge_in_when_it_covers_the_hole():
-    """A book losing $900 if the market falls takes a bet that pays then."""
-    model = ScenarioHedged(loss_budget=1_000.0)
-    book = np.array([-900.0, 50.0, 50.0])
-    assert model._largest_scale(book, np.array([200.0, -40.0, -40.0])) == 1.0
-    assert model._largest_scale(book, np.array([-200.0, 10.0, 10.0])) == pytest.approx(0.5)
+    """A book losing $900 in scenario 0 takes a bet that pays there."""
+    from models.scenario_hedged import Book
+    model = ScenarioHedged(loss_budget=1_000.0, loss_frac=0.0, sd_frac=None)
+    pnl = np.full(49, 50.0); pnl[0] = -900.0
+    book = Book(pnl, {}, 0.0)
+    pays_there = np.zeros(49); pays_there[0] = 1.0
+    assert model._largest_fraction(book, ("B", "hit_down", 0), 240.0, 40.0, pays_there, 0.2) == 1.0
+    loses_there = np.ones(49); loses_there[0] = 0.0
+    t = model._largest_fraction(book, ("C", "hit_up", 1), 210.0, 200.0, loses_there, 0.95)
+    assert t == pytest.approx(0.5)
+
+
+def test_scenario_weights_are_a_distribution():
+    from models.scenario_hedged import WEIGHTS, K, MU
+    assert WEIGHTS.sum() == pytest.approx(1.0) and len(WEIGHTS) == len(K) == len(MU) == 49
+    assert K[WEIGHTS.argmax()] == pytest.approx(1.0) and MU[WEIGHTS.argmax()] == pytest.approx(0.0)
 
 
 # ------------------------------------------------------- the YES risk premium

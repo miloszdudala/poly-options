@@ -49,6 +49,10 @@ KNOWN_THIN_DATES = {
     # the 10-01 collector table: 22 of 23 cycles not ok).
     "2026-09-29",
     "2026-10-01",
+    # 9 of 11 snapshots hit their deadline and skipped the option chains
+    # ("deadline hit after kalshi/polymarket books: options skipped", runs
+    # table): 1 cycle could be priced.
+    "2026-10-12",
 }
 
 YES, NO = 0, 1
@@ -145,9 +149,12 @@ def test_every_in_session_cycle_with_books_is_priced(dates):
     """A cycle with books and no fair values is a cycle no model could trade.
     Failure: `daily.py` step 1 did not run, or `price_missing` failed on it."""
     book_dates = data._q(f"select distinct date from {data._src('poly_books')} order by 1")
+    # Today's books are priced by the evening `daily.py`; until it runs they
+    # are not a failure (2026-10-19 failed all day for that reason).
+    today = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d")
     missing = {}
     for date in book_dates["date"].astype(str):
-        if date in data.EXCLUDED_DATES:
+        if date in data.EXCLUDED_DATES or date >= today:
             continue
         cycles = data.session_cycles(date)
         if not cycles:
@@ -206,26 +213,43 @@ def test_spot_comes_from_a_bar_for_nearly_every_equity_market(fair):
 
 
 def test_bar_spot_agrees_with_cboe_s_delayed_price(fair, dates):
-    """The two spots are the same stock 15 minutes apart. A gap past 2% on a
-    median cycle is a symbol mismatch or a bar stamped on the wrong clock.
+    """Cboe's delayed last against the high-low range of our 5-minute bar at
+    Cboe's own quote time: the same stock at the same moment. Outside that
+    range by more than 2% is a symbol mismatch or a bar stamped on the wrong
+    clock. The range, not the bar's open: OPEN fell 2.115 -> 2.060 inside the
+    13:40Z bar of 10-19 and Cboe's 13:44 last (2.065) is inside it.
 
-    The first 30 minutes of a session are left out: Cboe's delayed last is
-    then yesterday's close or the opening print, and the open's quarter-hour
-    moves more than 2% on its own (HOOD 2.6%, 2026-09-21 13:45Z)."""
+    Compared at Cboe's quote time, not the cycle's, since 2026-10-20. Against
+    the cycle's spot the test measured the stock's move over Cboe's delay,
+    and failed on markets, not on data: COIN, MSTR and RKLB move 2-3% between
+    9:45 and 10:00 ET, and on 09-23/24 Cboe's whole snapshot was the previous
+    close (quote times 09-22 19:59Z, 72,000 s old; GOOGL 351.80 against bars
+    at 340.7, which were right).
+
+    The first 30 minutes of a session are still left out: Cboe's delayed last
+    is then yesterday's close or the opening print."""
     worst = {}
+    bars = data.bars_5m()
     for date in dates:
         cycles = sorted(c for c in set(fair.loc[fair["date"] == date, "cycle_id"])
                         if c[9:15] >= OPEN_SETTLED_Z)
         for cycle_id in cycles[:: max(1, len(cycles) // 3)]:      # a few per date
             cboe = data.cboe_spot(cycle_id).set_index("symbol")["last_price"]
-            rows = fair[(fair["cycle_id"] == cycle_id) & (fair["spot_source"] == "bar_5m")]
+            rows = fair[(fair["cycle_id"] == cycle_id) & (fair["spot_source"] == "bar_5m")
+                        & fair["quote_time_utc"].notna()]
             rows = rows.drop_duplicates("ticker")
-            for row in rows.itertuples():
-                ref = cboe.get(row.ticker)
-                if ref and np.isfinite(ref) and ref > 0:
-                    gap = abs(row.spot / ref - 1.0)
-                    if gap > MAX_SPOT_VS_CBOE:
-                        worst[(cycle_id, row.ticker)] = round(gap, 4)
+            if rows.empty:
+                continue
+            at = pd.to_datetime(rows["quote_time_utc"], utc=True, format="ISO8601")
+            for ticker, when in zip(rows["ticker"], at):
+                ref = cboe.get(ticker)
+                bar = bars[(bars["symbol"] == ticker) & (bars["bar_time"] <= when)].tail(1)
+                if not (ref and np.isfinite(ref) and ref > 0) or bar.empty:
+                    continue
+                lo, hi = float(bar["low"].iloc[0]), float(bar["high"].iloc[0])
+                gap = max(lo - ref, ref - hi, 0.0) / ref
+                if gap > MAX_SPOT_VS_CBOE:
+                    worst[(cycle_id, ticker)] = round(gap, 4)
     assert not worst, f"bar spot vs Cboe last past {MAX_SPOT_VS_CBOE:.0%}: {worst}"
 
 
@@ -507,6 +531,10 @@ def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
         cost = f.price + 0.04 * min(f.price, 1 - f.price)
         dear = f.price > 0.90
         ev_bar, roi_bar = (0.0, 0.02) if dear else (0.03, 0.08)
+        if str(f.reason).endswith("_hedge"):
+            # A hedge leg of direction_balanced / scenario_hedged: let in at
+            # EV >= 0 while the book is past its limit (MODELS 5.2c/d).
+            ev_bar, roi_bar = 0.0, 0.0
         if "_ev" in f.model:
             continue        # a tagged sweep runs at its own bar
         if win - cost < ev_bar - 1e-9 or (win - cost) / cost < roi_bar - 1e-9:

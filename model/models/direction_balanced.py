@@ -1,71 +1,88 @@
-"""`direction_balanced`: hold as much "stock goes up" as "stock goes down".
+"""`direction_balanced`: hold about as much "stock goes up" as "stock goes down".
 
-The user's proposal (2026-10-09), replacing balanced_book's four quadrants
-with the two directions they collapse into:
+The user's proposal (2026-10-09). Every bet leans up or down (`models/bets.py`):
+YES on hit_up and NO on hit_down lean up, YES on hit_down and NO on hit_up
+lean down. Measured in dollars paid, one lean may exceed the other by at most
+`balance_frac` (10%) of everything held, or `balance_slack` ($150) while the
+book is small.
 
-| position        | says the stock will |
-|-----------------|---------------------|
-| YES on hit_up   | go up               |
-| NO on hit_down  | go up (not fall)    |
-| YES on hit_down | go down             |
-| NO on hit_up    | go down (not rise)  |
+Two passes a cycle:
 
-Measured in max loss (dollars paid), a direction may exceed the other by at
-most `balance_slack`. Same signal as edge_taker, no deltas, no betas.
+1. **Edges.** Every bet that clears the bar, best ROI first, up to the
+   per-market cap or the room its lean has left, whichever is smaller.
+2. **Hedges.** If the book is still lopsided past the slack (one side
+   resolved, a market touched), bets on the light lean that clear a lower bar,
+   EV >= 0, up to what makes the two leans level and no further.
 
-What it does not balance is volatility: NO on both sides is a short
-straddle, flat in direction and still losing on a large move either way.
+What it does not balance is volatility: NO on both sides of a stock leans
+neither way and still loses on a big move in either direction. That is
+scenario_hedged's job; this model is the safeguard for direction.
 """
 from __future__ import annotations
 
-import sim
-from sim import LONG_STOCK, SHORT_STOCK, Order, Params, YES
+from models.bets import DOWN, UP, Bet, Model
+from sim import Params
+
+BALANCE_FRAC = 0.10
 
 
-class DirectionBalanced:
+class DirectionBalanced(Model):
     name = "direction_balanced"
-
-    #: Ticker cap a little looser than balanced_book's 8%, since two buckets
-    #: bind less than four; the direction rule replaces the direction cap.
     params = Params(ticker_cap_frac=0.10, direction_cap_frac=1.0)
 
     def __init__(self, min_ev: float = 0.03, min_roi: float = 0.08,
-                 balance_slack: float = 500.0):
-        self.min_ev = min_ev
-        self.min_roi = min_roi
+                 balance_slack: float = 150.0, balance_frac: float = BALANCE_FRAC,
+                 hedge_min_ev: float | None = 0.0):
+        super().__init__(min_ev, min_roi)
         self.balance_slack = balance_slack
-        self.refusals: dict[str, int] = {}
+        self.balance_frac = balance_frac
+        self.hedge_min_ev = hedge_min_ev
 
-    def propose(self, state: sim.CycleState) -> list[Order]:
-        candidates = sim.candidate_edges(state, min_ev=self.min_ev, min_roi=self.min_roi)
-        if candidates.empty:
-            return []
-        params = state.params
-        held = {d: state.portfolio.direction_usd(d) for d in (LONG_STOCK, SHORT_STOCK)}
-        sides = dict(held)
-        orders: list[Order] = []
-        self.refusals = {}
+    def decide(self, offers: list[Bet]) -> None:
+        held = self.held_by_lean()                  # at the start of the cycle
+        slack = max(self.balance_slack, self.balance_frac * (held[UP] + held[DOWN]))
+        after = dict(held)                          # including this cycle's bets
+        minimum = self.params.min_fill_usd
+        chosen = set()
 
-        for row in candidates.itertuples():
-            outcome = int(row.outcome_index)
-            side = sim.direction_of(row.contract_type, outcome)
-            other = SHORT_STOCK if side == LONG_STOCK else LONG_STOCK
-            # The other side counts at what the book holds, not at this cycle's
-            # projections, for balanced_book's reason: a projection the harness
-            # then refuses must not license an order on the opposite side.
-            allowance = held[other] + self.balance_slack - sides[side]
-            if allowance < params.min_fill_usd:
-                self.refusals["direction_balance"] = self.refusals.get("direction_balance", 0) + 1
+        # 1. Edges, each only as large as its lean has room for. The other
+        #    lean counts at what is held, not at this cycle's bets, so a bet
+        #    the harness may still refuse cannot make room on the other side.
+        for bet in offers:
+            if not bet.clears(self.min_ev, self.min_roi):
                 continue
-            cap = params.cap_yes_usd if outcome == YES else params.cap_no_usd
-            order = Order(market_id=row.market_id, outcome_index=outcome,
-                          max_usd=min(cap, allowance), limit_price=float(row.limit_price),
-                          reason="direction_balanced", fair=float(row.fair),
-                          fair_source=str(row.fair_source))
-            projection = sim.project(state, order)
-            if projection["cost_usd"] < params.min_fill_usd:
-                self.refusals["no_depth"] = self.refusals.get("no_depth", 0) + 1
+            other = DOWN if bet.lean == UP else UP
+            room = held[other] + slack - after[bet.lean]
+            if room < minimum:
+                self.refuse("direction_balance")
                 continue
-            sides[side] += projection["cost_usd"]
-            orders.append(order)
-        return orders
+            usd = min(self.cap(bet), room)
+            got = bet.quote(usd, bet.limit(self.min_ev, self.min_roi))
+            if got.cost < minimum:
+                self.refuse("no_depth")
+                continue
+            self.take_bet(bet, usd=usd, reason="direction_balanced")
+            after[bet.lean] += got.cost
+            chosen.add((bet.market_id, bet.side))
+
+        # 2. Hedges, only while the book held is lopsided past the slack.
+        if self.hedge_min_ev is None or abs(held[UP] - held[DOWN]) <= slack:
+            return
+        light = UP if held[UP] < held[DOWN] else DOWN
+        heavy = DOWN if light == UP else UP
+        for bet in offers:
+            if not bet.clears(self.hedge_min_ev, 0.0):
+                continue
+            if (bet.market_id, bet.side) in chosen or bet.lean != light:
+                continue
+            gap = after[heavy] - after[light]
+            if gap < minimum:
+                break
+            usd = min(self.cap(bet), gap)
+            limit = bet.limit(self.hedge_min_ev, 0.0)
+            got = bet.quote(usd, limit)
+            if got.cost < minimum:
+                continue
+            self.take_bet(bet, usd=usd, reason="direction_balanced_hedge", limit=limit)
+            after[light] += got.cost
+            self.count("hedges")
