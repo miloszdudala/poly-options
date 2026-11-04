@@ -93,13 +93,13 @@ class KalshiIndex(bet_types.Type):
         return kalshi_asks(bids)
 
     def resolutions(self, upto) -> pd.DataFrame:
-        """Each market's result, stamped when the collector first saw it."""
+        """Each market's result, stamped when Kalshi settled it."""
         stamp = pd.Timestamp(upto)
         stamp = stamp.tz_localize("UTC") if stamp.tz is None else stamp.tz_convert("UTC")
         frame = data._q(f"""
-            select ticker market_id, lower(arg_min(result, fetched_at_utc)) result,
-                   min(fetched_at_utc) settled_at_utc
-            from {data._src('kalshi_markets')}
+            select ticker market_id, lower(any_value(result)) result,
+                   any_value(settled_at_utc) settled_at_utc
+            from {data._src('kalshi_resolutions')}
             where series_ticker in ({self._series_sql()}) and lower(result) in ('yes', 'no')
             group by ticker
         """)

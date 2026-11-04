@@ -224,6 +224,7 @@ def _intraday_discovery(run: Run) -> None:
 
 def job_daily(run: Run) -> None:
     """Post-close refresh of everything slow-moving."""
+    import kalshi
     from poly_books import collect_price_history, collect_resolutions
     from poly_discover import discover
     from options import collect_options
@@ -245,6 +246,7 @@ def job_daily(run: Run) -> None:
     run.counts.update(refresh_events(run.http, run.cycle_id))
     markets = tracked_markets() or markets
     run.counts["resolutions"] = collect_resolutions(run.http, markets, run.cycle_id)
+    run.counts["kalshi_resolutions"] = kalshi.collect_resolutions(run.http, run.cycle_id)
     run.counts["poly_price_history"] = collect_price_history(
         run.http, markets, run.cycle_id)
 

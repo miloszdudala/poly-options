@@ -41,3 +41,24 @@ def test_always_series_bypasses_the_filter():
 def test_boundary_is_inclusive():
     assert kalshi.wants_book(mkt(yes_bid=0.40, yes_ask=0.60)) is True   # exactly 0.20
     assert kalshi.wants_book(mkt(yes_bid=0.40, yes_ask=0.61)) is False
+
+
+def test_settled_markets_are_stored_with_kalshis_settlement_time(monkeypatch):
+    pages = [{"markets": [{"ticker": "KXINX-T", "result": "no", "expiration_value": "7568.92",
+                           "close_time": "2026-11-03T21:00:00Z",
+                           "settlement_ts": "2026-11-04T00:02:10Z"}], "cursor": "next"},
+             {"markets": [], "cursor": ""}]
+
+    class FakeHttp:
+        def get(self, url, venue, identifier, params):
+            assert params["status"] == "settled"
+            return pages.pop(0) if pages else {"markets": []}
+
+    written = {}
+    monkeypatch.setattr(kalshi, "all_series", lambda: ["KXINX"])
+    monkeypatch.setattr(kalshi, "write_table",
+                        lambda table, rows, partition_date: written.update({table: rows}))
+    assert kalshi.collect_resolutions(FakeHttp(), "cycle") == 1
+    row = written["kalshi_resolutions"][0]
+    assert (row["ticker"], row["result"], row["expiration_value"]) == ("KXINX-T", "no", 7568.92)
+    assert row["settled_at_utc"] == "2026-11-04T00:02:10Z"
