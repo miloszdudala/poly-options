@@ -20,7 +20,7 @@ import pandas as pd
 import bet_types
 import data
 from _chain import (SKIP_NO_CHAIN, SKIP_NO_EXPIRY, SKIP_NO_STRIKES, SKIP_NO_TERMS,
-                    prob_above)
+                    SKIP_QUOTE_AFTER_BOOK, prob_above, settled_at_the_close)
 from engine import STALE_CHAIN_S, expiry_closes
 from sessions import nyse_sessions
 
@@ -115,7 +115,7 @@ class KalshiIndex(bet_types.Type):
             return pd.DataFrame()
         terms = self.terms()
         chain = data.option_chain(cycle_id, (self.underlying,))
-        calls = chain[chain["option_type"] == "call"]
+        calls = settled_at_the_close(chain[chain["option_type"] == "call"])
         q_time = data.quote_times(cycle_id).get(self.underlying, pd.NaT)
         fetched = pd.Timestamp(asks["fetched_at_utc"].max())
         rate = data.risk_free_rate(fetched)
@@ -130,6 +130,9 @@ class KalshiIndex(bet_types.Type):
             term = terms.loc[ticker]
             if calls.empty or pd.isna(q_time) or (fetched - q_time).total_seconds() > STALE_CHAIN_S:
                 self.skip(SKIP_NO_CHAIN)
+                continue
+            if q_time > fetched:
+                self.skip(SKIP_QUOTE_AFTER_BOOK)
                 continue
             at = term["close_time"]
             expiry = next((e for e, c in closes.items()

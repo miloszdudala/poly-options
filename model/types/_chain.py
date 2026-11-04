@@ -32,6 +32,16 @@ SKIP_NO_STRIKES = "no call strikes either side of the level"
 SKIP_NO_CHAIN = "no fresh option chain"
 SKIP_NO_TERMS = "no market terms"
 SKIP_NO_OPEN = "no opening price yet"
+SKIP_QUOTE_AFTER_BOOK = "option quote newer than the book"
+#: Index option roots that settle on the morning's opening prints. On a third
+#: Friday they share an expiry date with SPXW / NDXP, which settle at the close.
+MORNING_SETTLED_ROOTS = ("SPX", "NDX")
+
+
+def settled_at_the_close(chain: pd.DataFrame) -> pd.DataFrame:
+    """Drop morning-settled index options: the markets here observe the close."""
+    roots = chain["contract_symbol"].str.extract(r"^([A-Z]+)", expand=False)
+    return chain[~roots.isin(MORNING_SETTLED_ROOTS)]
 
 
 def prob_above(calls: pd.DataFrame, level: float, rate: float, years: float) -> float:
@@ -150,10 +160,15 @@ class ChainPriced(bet_types.Polymarket):
                 continue
             term = terms.loc[market.market_id]
             q_time = quote_time.get(market.ticker, pd.NaT)
-            mine = chain[(chain["underlying"] == market.ticker) & (chain["option_type"] == "call")]
+            mine = settled_at_the_close(chain[(chain["underlying"] == market.ticker)
+                                              & (chain["option_type"] == "call")])
             if (mine.empty or pd.isna(q_time)
                     or (market.fetched_at - q_time).total_seconds() > STALE_CHAIN_S):
                 self.skip(SKIP_NO_CHAIN)
+                continue
+            # The fair would know something the book did not (bet_types.PolymarketHit).
+            if q_time > market.fetched_at:
+                self.skip(SKIP_QUOTE_AFTER_BOOK)
                 continue
             closes = expiry_closes(sorted(mine["expiry"].dropna().unique()), self._sessions)
             expiry = next((e for e, c in closes.items() if pd.notna(c) and c == deadline), None)

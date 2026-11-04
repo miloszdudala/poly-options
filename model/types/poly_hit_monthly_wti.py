@@ -20,6 +20,7 @@ SKIP_NO_PRICE = "no price for the contract Active at the deadline"
 SKIP_NO_CHAIN = "no fresh USO chain"
 SKIP_NO_EXPIRY = "no USO expiry at or after the deadline"
 SKIP_TOUCHED = "barrier already printed in ICE hours"
+SKIP_QUOTE_AFTER_BOOK = "option quote newer than the book"
 
 
 class PolyHitMonthlyWti(bet_types.Polymarket):
@@ -84,6 +85,9 @@ class PolyHitMonthlyWti(bet_types.Polymarket):
             if (chain.empty or pd.isna(q_time) or uso_spot is None
                     or (now - q_time).total_seconds() > STALE_CHAIN_S):
                 self.skip_market(SKIP_NO_CHAIN, market_id)
+                continue
+            if q_time > now:
+                self.skip_market(SKIP_QUOTE_AFTER_BOOK, market_id)
                 continue
             after = sorted(c for c in closes.values() if pd.notna(c) and c >= deadline)
             if not after:

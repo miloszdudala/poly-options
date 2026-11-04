@@ -34,7 +34,7 @@ STRIKES = np.round(np.arange(80.0, 120.01, 0.1), 1)
 
 def calls(expiry=FRIDAY, strikes=STRIKES, years=YEARS):
     prices = fair.bs_price(SPOT, strikes, years, SIGMA, RATE, True)
-    return pd.DataFrame({"underlying": "NVDA", "option_type": "call", "expiry": expiry,
+    return pd.DataFrame({"underlying": "NVDA", "option_type": "call", "contract_symbol": "NVDA261016C", "expiry": expiry,
                          "strike": strikes, "mid": prices})
 
 

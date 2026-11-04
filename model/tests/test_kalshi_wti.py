@@ -75,7 +75,7 @@ SPOT, SIGMA, RATE = 6000.0, 0.15, 0.04
 
 def spx_calls(years):
     strikes = np.arange(5900.0, 6100.01, 1.0)
-    return pd.DataFrame({"underlying": "SPX", "option_type": "call",
+    return pd.DataFrame({"underlying": "SPX", "option_type": "call", "contract_symbol": "SPXW260916C",
                          "expiry": pd.Timestamp("2026-09-16"), "strike": strikes,
                          "mid": fair.bs_price(SPOT, strikes, years, SIGMA, RATE, True)})
 
