@@ -1,15 +1,19 @@
 """Shared by the types priced directly from the option chain (no touch formula).
 
-P(the underlying finishes above K) is read off the call spread around K at the
-expiry whose 16:00 ET close *is* the market's deadline:
+P(the underlying finishes above K) is read off the option spread around K at
+the expiry whose 16:00 ET close *is* the market's deadline, on whichever side is
+out of the money at K:
 
-    P(S_T > K) = e^{rT} (C(K1) - C(K2)) / (K2 - K1)
+    K at or above the money: P(S_T > K) = e^{rT} (C(K1) - C(K2)) / (K2 - K1)
+    K below the money:       P(S_T > K) = 1 - e^{rT} (P(K2) - P(K1)) / (K2 - K1)
 
 with K1 the nearest listed strike below K and K2 the nearest above (a strike at
 K itself is skipped, so the spread is centred on K whenever the strikes are
-evenly spaced). The call spread is the textbook digital: on a flat-vol chain it
-is N(d2). If no expiry closes exactly at the deadline, the market is skipped
-and counted, never interpolated.
+evenly spaced). This is the textbook digital: on a flat-vol chain it is N(d2).
+Deep in-the-money mids are too wide to difference: priced from calls alone,
+far-below-the-money levels came out at exactly 1.000 and lost money. If no expiry
+closes exactly at the deadline, the market is skipped and counted, never
+interpolated.
 
 The chain is Cboe's, about 15 minutes older than the book; a chain older than
 `engine.STALE_CHAIN_S` is treated as absent. Markets on non-stocks
@@ -28,7 +32,7 @@ from engine import STALE_CHAIN_S, expiry_closes
 from sessions import deadline_close, nyse_sessions
 
 SKIP_NO_EXPIRY = "no expiry at the deadline"
-SKIP_NO_STRIKES = "no call strikes either side of the level"
+SKIP_NO_STRIKES = "no strikes either side of the level"
 SKIP_NO_CHAIN = "no fresh option chain"
 SKIP_NO_TERMS = "no market terms"
 SKIP_NO_PREVIOUS_CLOSE = "no previous close"
@@ -45,25 +49,34 @@ def settled_at_the_close(chain: pd.DataFrame) -> pd.DataFrame:
     return chain[~roots.isin(MORNING_SETTLED_ROOTS)]
 
 
-def prob_above(calls: pd.DataFrame, level: float, rate: float, years: float) -> float:
-    """P(S_T > level) from the call spread around `level`.
+def prob_above(options: pd.DataFrame, level: float, rate: float, years: float) -> float:
+    """P(S_T > level) from the out-of-the-money spread around `level`.
 
-    `calls` holds one expiry's calls: `strike` and `mid`. NaN when there is no
-    listed strike on one side of the level.
+    `options` holds one expiry's calls and puts: `option_type`, `strike`, `mid`.
+    The money is the strike where calls and puts cost the most alike. NaN when
+    that side has no listed strike on one side of the level.
     """
-    strikes = calls.dropna(subset=["mid"]).groupby("strike")["mid"].mean().sort_index()
+    mids = options.dropna(subset=["mid"])
+    calls = mids[mids["option_type"] == "call"].groupby("strike")["mid"].mean().sort_index()
+    puts = mids[mids["option_type"] == "put"].groupby("strike")["mid"].mean().sort_index()
+    both = calls.index.intersection(puts.index)
+    if both.empty:
+        return float("nan")
+    use_calls = level >= (calls[both] - puts[both]).abs().idxmin()
+    strikes = calls if use_calls else puts
     below = strikes[strikes.index < level]
     above = strikes[strikes.index > level]
     if below.empty or above.empty:
         return float("nan")
-    k1, c1 = float(below.index[-1]), float(below.iloc[-1])
-    k2, c2 = float(above.index[0]), float(above.iloc[0])
-    p = math.exp(rate * max(years, 0.0)) * (c1 - c2) / (k2 - k1)
+    k1, m1 = float(below.index[-1]), float(below.iloc[-1])
+    k2, m2 = float(above.index[0]), float(above.iloc[0])
+    growth = math.exp(rate * max(years, 0.0))
+    p = growth * (m1 - m2) / (k2 - k1) if use_calls else 1.0 - growth * (m2 - m1) / (k2 - k1)
     return float(np.clip(p, 0.0, 1.0))
 
 
 class ChainPriced(bet_types.Polymarket):
-    """A Polymarket type of one contract type and period, priced off calls.
+    """A Polymarket type of one contract type and period, priced off the chain.
 
     A subclass sets `name`, `contract_type`, `period`, and writes
     `fair_yes(probability_above, market)`: the probability that outcome 0
@@ -161,8 +174,7 @@ class ChainPriced(bet_types.Polymarket):
                 continue
             term = terms.loc[market.market_id]
             q_time = quote_time.get(market.ticker, pd.NaT)
-            mine = settled_at_the_close(chain[(chain["underlying"] == market.ticker)
-                                              & (chain["option_type"] == "call")])
+            mine = settled_at_the_close(chain[chain["underlying"] == market.ticker])
             if (mine.empty or pd.isna(q_time)
                     or (market.fetched_at - q_time).total_seconds() > STALE_CHAIN_S):
                 self.skip(SKIP_NO_CHAIN)
@@ -176,11 +188,11 @@ class ChainPriced(bet_types.Polymarket):
             if expiry is None:
                 self.skip(SKIP_NO_EXPIRY)
                 continue
-            calls = mine[mine["expiry"] == expiry]
+            options = mine[mine["expiry"] == expiry]
             years = (deadline - q_time).total_seconds() / (365.0 * 86400.0)
 
-            def above(level, calls=calls, years=years):
-                return prob_above(calls, float(level), rate, years)
+            def above(level, options=options, years=years):
+                return prob_above(options, float(level), rate, years)
 
             fair = self.fair_yes(above, {**term.to_dict(), "ticker": market.ticker,
                                          "cycle_id": cycle_id, "deadline": deadline})

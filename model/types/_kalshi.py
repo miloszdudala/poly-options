@@ -1,7 +1,7 @@
 """Shared by the Kalshi index types: books, terms, results and the fee.
 
 Kalshi's S&P 500 and Nasdaq-100 "above X / in range at time T" markets are
-priced off the SPX / NDX call spread (`_chain.prob_above`) at the expiry whose
+priced off the SPX / NDX option spread (`_chain.prob_above`) at the expiry whose
 16:00 ET close is the market's observation time (`close_time`); no exact
 expiry, no price (skipped and counted, as for the Polymarket chain types).
 
@@ -115,12 +115,12 @@ class KalshiIndex(bet_types.Type):
             return pd.DataFrame()
         terms = self.terms()
         chain = data.option_chain(cycle_id, (self.underlying,))
-        calls = settled_at_the_close(chain[chain["option_type"] == "call"])
+        options = settled_at_the_close(chain)
         q_time = data.quote_times(cycle_id).get(self.underlying, pd.NaT)
         fetched = pd.Timestamp(asks["fetched_at_utc"].max())
         rate = data.risk_free_rate(fetched)
-        closes = expiry_closes(sorted(calls["expiry"].dropna().unique()), self._sessions) \
-            if len(calls) else {}
+        closes = expiry_closes(sorted(options["expiry"].dropna().unique()), self._sessions) \
+            if len(options) else {}
         rows = []
         for ticker in sorted(asks["market_id"].unique()):
             self._market = ticker
@@ -128,7 +128,7 @@ class KalshiIndex(bet_types.Type):
                 self.skip(SKIP_NO_TERMS)
                 continue
             term = terms.loc[ticker]
-            if calls.empty or pd.isna(q_time) or (fetched - q_time).total_seconds() > STALE_CHAIN_S:
+            if options.empty or pd.isna(q_time) or (fetched - q_time).total_seconds() > STALE_CHAIN_S:
                 self.skip(SKIP_NO_CHAIN)
                 continue
             if q_time > fetched:
@@ -142,7 +142,7 @@ class KalshiIndex(bet_types.Type):
                 self.skip(SKIP_NO_EXPIRY)
                 continue
             years = (at - q_time).total_seconds() / (365.0 * 86400.0)
-            mine = calls[calls["expiry"] == expiry]
+            mine = options[options["expiry"] == expiry]
             fair, direction = fair_yes(term, lambda k: prob_above(mine, float(k), rate, years))
             if fair is None:
                 self.skip(SKIP_STRIKE_TYPE)
@@ -163,15 +163,17 @@ def fair_yes(term, above) -> tuple[float | None, str | None]:
 
     `greater(_or_equal)`: above `floor_strike`; `less(_or_equal)`: below
     `cap_strike`; `between`: from `floor_strike` to `cap_strike`. Anything else
-    returns (None, None).
+    returns (None, None). Kalshi writes its levels as 7574.9999; to the cent that
+    is 7575, the level the next bracket starts from.
     """
     kind = str(term.get("strike_type") or "")
+    floor, cap = term.get("floor_strike"), term.get("cap_strike")
     if kind in ("greater", "greater_or_equal"):
-        return above(term["floor_strike"]), "up"
+        return above(round(floor, 2)), "up"
     if kind in ("less", "less_or_equal"):
-        return 1.0 - above(term["cap_strike"]), "down"
+        return 1.0 - above(round(cap, 2)), "down"
     if kind == "between":
-        return above(term["floor_strike"]) - above(term["cap_strike"]), None
+        return above(round(floor, 2)) - above(round(cap, 2)), None
     return None, None
 
 

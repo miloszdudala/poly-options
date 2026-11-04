@@ -33,15 +33,26 @@ STRIKES = np.round(np.arange(80.0, 120.01, 0.1), 1)
 
 
 def calls(expiry=FRIDAY, strikes=STRIKES, years=YEARS):
-    prices = fair.bs_price(SPOT, strikes, years, SIGMA, RATE, True)
-    return pd.DataFrame({"underlying": "NVDA", "option_type": "call", "contract_symbol": "NVDA261016C", "expiry": expiry,
-                         "strike": strikes, "mid": prices})
+    """A whole chain, calls and puts."""
+    return pd.concat([
+        pd.DataFrame({"underlying": "NVDA", "option_type": kind, "contract_symbol": "NVDA261016",
+                      "expiry": expiry, "strike": strikes,
+                      "mid": fair.bs_price(SPOT, strikes, years, SIGMA, RATE, kind == "call")})
+        for kind in ("call", "put")], ignore_index=True)
 
 
 def test_a_call_spread_on_a_flat_vol_chain_is_n_d2():
     for level in (95.0, 100.0, 104.0):           # listed: the spread is centred
         assert prob_above(calls(), level, RATE, YEARS) == pytest.approx(n_d2(level), abs=2e-3)
     assert prob_above(calls(), 102.55, RATE, YEARS) == pytest.approx(n_d2(102.55), abs=2e-3)
+
+
+def test_a_level_below_the_money_is_read_from_the_puts():
+    """A deep in-the-money call spread is noise: wide mids, not the probability."""
+    chain = calls()
+    noisy = (chain["option_type"] == "call") & (chain["strike"] < 90.0)
+    chain.loc[noisy, "mid"] = 99.0 - chain.loc[noisy, "strike"]        # a spread of exactly 1.000
+    assert prob_above(chain, 85.0, RATE, YEARS) == pytest.approx(n_d2(85.0), abs=2e-3)
 
 
 def test_a_level_outside_the_listed_strikes_has_no_price():

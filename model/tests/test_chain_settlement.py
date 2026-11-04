@@ -21,6 +21,9 @@ def test_morning_settled_index_options_are_dropped_on_a_third_friday():
 def test_a_third_friday_prices_off_the_close_settled_options_alone():
     chain = calls(("SPX261016C05000000", 5000.0, 99.0), ("SPX261016C05010000", 5010.0, 90.0),
                   ("SPXW261016C05000000", 5000.0, 60.0), ("SPXW261016C05010000", 5010.0, 55.0))
+    chain["option_type"] = "call"
+    puts = chain.assign(option_type="put", mid=[99.0, 90.0, 60.0, 55.0])
+    chain = pd.concat([chain, puts], ignore_index=True)
     p = _chain.prob_above(_chain.settled_at_the_close(chain), 5005.0, 0.0, 0.01)
     assert abs(p - 0.5) < 1e-9
 

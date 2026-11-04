@@ -63,6 +63,13 @@ def test_the_payoff_follows_the_strike_type(term, expected, direction):
     assert lean == direction
 
 
+def test_kalshis_levels_are_read_to_the_cent():
+    seen = []
+    _kalshi.fair_yes({"strike_type": "between", "floor_strike": 7550.0, "cap_strike": 7574.9999},
+                     lambda k: seen.append(k) or 0.5)
+    assert seen == [7550.0, 7575.0]
+
+
 def test_a_kalshi_result_settles_at_par_or_nothing():
     assert sim.payout_per_share("Yes", None, YES) == 1.0
     assert sim.payout_per_share("Yes", None, NO) == 0.0
@@ -75,9 +82,11 @@ SPOT, SIGMA, RATE = 6000.0, 0.15, 0.04
 
 def spx_calls(years):
     strikes = np.arange(5900.0, 6100.01, 1.0)
-    return pd.DataFrame({"underlying": "SPX", "option_type": "call", "contract_symbol": "SPXW260916C",
-                         "expiry": pd.Timestamp("2026-09-16"), "strike": strikes,
-                         "mid": fair.bs_price(SPOT, strikes, years, SIGMA, RATE, True)})
+    return pd.concat([
+        pd.DataFrame({"underlying": "SPX", "option_type": kind, "contract_symbol": "SPXW260916",
+                      "expiry": pd.Timestamp("2026-09-16"), "strike": strikes,
+                      "mid": fair.bs_price(SPOT, strikes, years, SIGMA, RATE, kind == "call")})
+        for kind in ("call", "put")], ignore_index=True)
 
 
 def test_a_range_at_the_close_is_priced_from_the_spx_call_spread(monkeypatch):
