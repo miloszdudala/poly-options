@@ -11,7 +11,7 @@ Three steps, in this order, because each needs the one before it:
    `run_all.run_everything`, which is the same call `run_all.py` makes. A daily
    report and an ad-hoc run must not be two different experiments.
 3. **Write** `model/reports/daily_<date>.md`: per model the cumulative resolved
-   PnL on confirmed fills, the open book at fair and at bid, the reliability
+   PnL, the open book at fair and at bid, the reliability
    table so far, the worst day, and today's exposure and capacity; then the
    collector's own gaps out of the `runs` table.
 
@@ -39,6 +39,7 @@ sys.path.append(str(HERE.parent / "data" / "src"))   # see model/data.py
 import data  # noqa: E402
 import fair_schema  # noqa: E402
 import run_all  # noqa: E402
+import results  # noqa: E402
 import sim  # noqa: E402
 from engine import price_cycle  # noqa: E402
 
@@ -128,8 +129,7 @@ def today_exposure(result: sim.Result, date: str) -> dict:
     """Net beta-dollar-delta at the last cycle of the date, and the day's peak.
 
     The closing number is the one MODELS 5.2's band is a statement about; the
-    peak is the one that says whether the band held during the session, and on
-    2026-09-16 those two differ by a factor of five for `factor_neutral`.
+    peak is the one that says whether the band held during the session.
     """
     equity = result.equity
     if equity.empty:
@@ -144,12 +144,11 @@ def today_exposure(result: sim.Result, date: str) -> dict:
 
 
 def today_fills(result: sim.Result, date: str) -> dict:
-    fills = sim.fills_frame(result)
+    fills = results.fills_frame(result)
     if fills.empty:
-        return {"fills": 0, "confirmed_usd": 0.0}
+        return {"fills": 0}
     mine = fills[fills["date"] == date]
-    return {"fills": int(len(mine)),
-            "confirmed_usd": float(mine[mine["confirmed"]]["cost_usd"].sum())}
+    return {"fills": int(len(mine))}
 
 
 # ------------------------------------------------------ 3. collector gaps
@@ -245,9 +244,9 @@ def report(date: str, runs: list, dates: list[str], priced: list[dict],
     lines += [f"## Today — {date}", "",
               f"Bankroll {_usd(bankroll)}; the `% bankroll` column is a share of it.",
               "",
-              "| model | cycles | orders | wanted $ | filled $ | fills | confirmed $ | "
+              "| model | cycles | orders | wanted $ | filled $ | fills | "
               "net beta$delta | peak | % bankroll |",
-              "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+              "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for result, m in runs:
         cap = today_capacity(result, date)
         exp = today_exposure(result, date)
@@ -257,24 +256,23 @@ def report(date: str, runs: list, dates: list[str], priced: list[dict],
         lines.append(
             f"| {m['model']} | {exp['cycles']:,} | {cap['orders']:,} | "
             f"{_usd(cap['wanted_usd'])} | {_usd(cap['filled_usd'])} | {fil['fills']:,} | "
-            f"{_usd(fil['confirmed_usd'])} | {_usd(exp['bdd_close'])} | "
+            f"{_usd(exp['bdd_close'])} | "
             f"{_usd(exp['bdd_peak'])} | "
             f"{'-' if not np.isfinite(pct) else f'{pct:.0%}'} |")
     lines.append("")
 
     lines += ["## Cumulative", "",
-              "| model | positions | resolved | PnL confirmed | PnL optimistic | "
+              "| model | positions | resolved | PnL | "
               "open cost | open @fair | open @bid | worst day | capital-days |",
-              "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+              "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for result, m in runs:
         lines.append(
             f"| {m['model']} | {m['positions_opened']:,} | {m['positions_resolved']:,} | "
-            f"{_usd2(m['pnl_confirmed_usd'])} | {_usd2(m['pnl_usd'])} | "
+            f"{_usd2(m['pnl_usd'])} | "
             f"{_usd(m['open_cost_usd'])} | {_usd2(m['open_pnl_at_fair_usd'])} | "
             f"{_usd2(m['open_pnl_at_bid_usd'])} | "
             f"{_usd2(m.get('worst_day_usd'))} | {_n(m['capital_days'])} |")
-    lines += ["", "`PnL confirmed` counts only fills whose price level still showed at "
-              "the next cycle (MODELS 4.2); open positions are marked both ways and "
+    lines += ["", "Open positions are marked both ways and "
               "excluded from the headline (MODELS 4.3).", ""]
 
     lines += ["## Reliability so far", "",
@@ -282,8 +280,8 @@ def report(date: str, runs: list, dates: list[str], priced: list[dict],
               "|---|---|---:|---:|---:|---:|---:|"]
     any_rows = False
     for result, m in runs:
-        settled = sim.settlements_frame(result)
-        table = sim.reliability(settled)
+        settled = results.settlements_frame(result)
+        table = results.reliability(settled)
         if len(table):
             any_rows = True
             for row in table.itertuples():
@@ -364,14 +362,14 @@ def main(argv=None) -> int:
     date, note = resolve_date(args.date, dates)
     if note:
         echo(f"  {note}")
-    _, sample = sim.universe_scores(dates)
+    _, sample = results.universe_scores(dates)
     since = (dt.date.fromisoformat(dates[-1]) - dt.timedelta(days=GAP_WINDOW_DAYS)).isoformat()
     gaps = collector_gaps(since)
 
     text = report(date, runs, dates, priced_stats, gaps, sample,
                   time.time() - started, note)
-    sim.REPORTS.mkdir(parents=True, exist_ok=True)
-    out = sim.REPORTS / f"daily_{date}.md"
+    results.REPORTS.mkdir(parents=True, exist_ok=True)
+    out = results.REPORTS / f"daily_{date}.md"
     out.write_text(text)
     echo(f"  wrote {out} ({len(text.splitlines())} lines)")
     print(text)

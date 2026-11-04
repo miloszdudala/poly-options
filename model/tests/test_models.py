@@ -1,8 +1,6 @@
 """The models of MODELS section 5, on synthetic states.
 
 Each test pins one requirement of the spec, not the model's output in general.
-factor_neutral, balanced_book and empirical_longshot were removed on
-2026-10-17; their tests went with them (git history has both).
 """
 from __future__ import annotations
 
@@ -15,7 +13,7 @@ import pytest
 import sim
 from sim import NO, YES, Params
 from models import DirectionBalanced, EdgeTaker, ScenarioHedged
-from test_sim import BOOK_COLUMNS, CYCLE_A, CYCLE_B, book, fair_rows, state
+from test_sim import CYCLE_A, book, fair_rows, state
 
 
 def market(market_id, ticker, contract_type, *, yes_ask=0.20, yes_size=10_000.0,
@@ -29,10 +27,9 @@ def market(market_id, ticker, contract_type, *, yes_ask=0.20, yes_size=10_000.0,
 
 
 def priced(market_id, ticker, contract_type, *, fair=0.40, delta=0.01, spot=200.0,
-           barrier=200.0, empirical=None, **extra):
+           barrier=200.0, **extra):
     return {"market_id": market_id, "ticker": ticker, "contract_type": contract_type,
             "fair_K": fair, "fair_atm": fair, "fair_cont": fair + 0.02,
-            "fair_empirical": fair if empirical is None else empirical,
             "delta": delta, "spot": spot, "barrier": barrier, **extra}
 
 

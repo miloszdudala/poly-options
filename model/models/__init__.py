@@ -1,7 +1,7 @@
 """The models of MODELS section 5, one file each.
 
 They share the signal (`sim.candidate_edges`), the execution (`sim.execute`)
-and the accounting (`sim.metrics`); what differs is the constraint each one
+and the accounting (`results.metrics`); what differs is the constraint each one
 puts on the book it builds, which is the only thing this pass is measuring.
 
 Model D (`maker`) is deliberately absent. MODELS 5.4 defers it: a resting bid

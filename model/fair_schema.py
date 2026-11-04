@@ -20,7 +20,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.parquet as pq
+
+from ledger_schema import write_rows
 
 STORE = Path(__file__).resolve().parent / "store"
 
@@ -34,8 +35,8 @@ FAIR = pa.schema([pa.field(n, t) for n, t in [
     # what it is a fair value of
     ("market_id", S), ("ticker", S), ("contract_type", S), ("direction", S),
     ("barrier", F), ("period", S), ("end_date", S), ("deadline_utc", S),
-    # the three option-implied numbers and the one that needs no options
-    ("fair_K", F), ("fair_atm", F), ("fair_cont", F), ("fair_empirical", F),
+    # the three option-implied numbers
+    ("fair_K", F), ("fair_atm", F), ("fair_cont", F),
     ("delta", F),
     # the inputs, so any row can be recomputed by hand
     ("sigma_K", F), ("sigma_atm", F), ("spread_iv", F), ("sigma_realised", F), ("f", F),
@@ -52,28 +53,6 @@ FAIR = pa.schema([pa.field(n, t) for n, t in [
 ]])
 
 
-def _cast(value, arrow_type):
-    if value is None:
-        return None
-    if arrow_type == S:
-        text = str(value)
-        return text if text not in ("", "NaT", "nan", "None") else None
-    if arrow_type == F:
-        try:
-            out = float(value)
-        except (TypeError, ValueError):
-            return None
-        return out
-    if arrow_type == I:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-    if arrow_type == B:
-        return bool(value)
-    return value
-
-
 def write_fair(rows, date: str, table: str = "fair") -> Path | None:
     """Append one Parquet file to model/store/fair/date=YYYY-MM-DD/.
 
@@ -88,7 +67,4 @@ def write_fair(rows, date: str, table: str = "fair") -> Path | None:
     out_dir = STORE / table / f"date={date}"
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%H%M%S%f")
-    path = out_dir / f"part-{stamp}.parquet"
-    typed = [{f.name: _cast(row.get(f.name), f.type) for f in FAIR} for row in rows]
-    pq.write_table(pa.Table.from_pylist(typed, schema=FAIR), path, compression="zstd")
-    return path
+    return write_rows(rows, FAIR, out_dir / f"part-{stamp}.parquet")

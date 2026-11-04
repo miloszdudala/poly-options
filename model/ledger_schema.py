@@ -8,9 +8,7 @@ Three tables, each in its own directory, because DuckDB's `read_parquet` glob
 errors when one file in the tree has a column its neighbours lack - so fills,
 marks and resolutions cannot share a directory even though they share a run.
 
-* `fills`     - every share bought, at what price, with what fee, and whether
-                the level was still there at the next cycle (the persistence
-                check of MODELS 4.2).
+* `fills`     - every share bought, at what price, with what fee.
 * `marks`     - one row per position per cycle: the model's fair, the
                 liquidation bid, and the beta-dollar-delta it carried.
 * `resolutions` - one row per position that settled: what it paid, when the
@@ -38,8 +36,7 @@ FILLS = pa.schema([pa.field(n, t) for n, t in [
     ("barrier", F), ("deadline_utc", S), ("period", S),
     ("depth_rank", I), ("price", F), ("shares", F), ("fee_usd", F), ("cost_usd", F),
     ("limit_price", F), ("fair", F), ("fair_source", S), ("reason", S),
-    # the persistence check: None until the next cycle has been seen
-    ("confirmed", B), ("checked", B), ("level_size", F), ("next_level_size", F),
+    ("level_size", F),
 ]])
 
 MARKS = pa.schema([pa.field(n, t) for n, t in [
@@ -56,8 +53,6 @@ RESOLUTIONS = pa.schema([pa.field(n, t) for n, t in [
     ("entry_cycle_id", S), ("entry_at_utc", S), ("settled_at_utc", S),
     ("cash_back_at_utc", S), ("result", S), ("payout_per_share", F),
     ("shares", F), ("cost_usd", F), ("fee_usd", F), ("payout_usd", F), ("pnl_usd", F),
-    ("shares_confirmed", F), ("cost_confirmed_usd", F), ("payout_confirmed_usd", F),
-    ("pnl_confirmed_usd", F),
     ("entry_fair", F), ("entry_fair_engine", F), ("fair_source", S),
     ("capital_days", F),
 ]])
@@ -71,19 +66,22 @@ def _cast(value, arrow_type):
     if arrow_type == S:
         text = str(value)
         return text if text not in ("", "NaT", "nan", "None") else None
-    if arrow_type == F:
+    if arrow_type in (F, I):
         try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-    if arrow_type == I:
-        try:
-            return int(value)
+            return float(value) if arrow_type == F else int(value)
         except (TypeError, ValueError):
             return None
     if arrow_type == B:
         return bool(value)
     return value
+
+
+def write_rows(rows: list[dict], schema: pa.Schema, path: Path) -> Path:
+    """Write `rows` to `path` under `schema`, casting each value to its column's
+    type and dropping keys the schema does not name. Shared with `fair_schema`."""
+    typed = [{f.name: _cast(row.get(f.name), f.type) for f in schema} for row in rows]
+    pq.write_table(pa.Table.from_pylist(typed, schema=schema), path, compression="zstd")
+    return path
 
 
 def write_ledger(rows, table: str, model: str, run_id: str) -> Path | None:
@@ -103,7 +101,4 @@ def write_ledger(rows, table: str, model: str, run_id: str) -> Path | None:
         return None
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%H%M%S%f")
-    path = out_dir / f"part-{stamp}.parquet"
-    typed = [{f.name: _cast(row.get(f.name), f.type) for f in schema} for row in rows]
-    pq.write_table(pa.Table.from_pylist(typed, schema=schema), path, compression="zstd")
-    return path
+    return write_rows(rows, schema, out_dir / f"part-{stamp}.parquet")

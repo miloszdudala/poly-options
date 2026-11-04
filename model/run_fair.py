@@ -87,7 +87,7 @@ def report(date: str, df: pd.DataFrame, stats: list[dict], elapsed: float) -> st
         "",
         "  fair value        median    n",
     ]
-    for col in ("fair_K", "fair_atm", "fair_cont", "fair_empirical"):
+    for col in ("fair_K", "fair_atm", "fair_cont"):
         good = df[col].dropna()
         lines.append(f"  {col:<18}{good.median():>6.3f}  {len(good):>6,}")
     both = df[df["fair_K"].notna() & df["fair_cont"].notna()]

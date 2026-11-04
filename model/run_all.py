@@ -34,6 +34,7 @@ sys.path.insert(0, str(HERE))
 sys.path.append(str(HERE.parent / "data" / "src"))   # see model/data.py
 
 import data  # noqa: E402
+import results  # noqa: E402
 import sim  # noqa: E402
 from models import DirectionBalanced, EdgeTaker, ScenarioHedged  # noqa: E402
 
@@ -42,10 +43,8 @@ SUMMARY_COLUMNS = [
     ("positions", "positions_opened", "{:,}"),
     ("wanted $", "wanted_usd", "${:,.0f}"),
     ("filled $", "filled_usd", "${:,.0f}"),
-    ("confirmed $", "cost_confirmed_usd", "${:,.0f}"),
     ("resolved", "positions_resolved", "{:,}"),
-    ("PnL opt", "pnl_usd", "${:,.2f}"),
-    ("PnL conf", "pnl_confirmed_usd", "${:,.2f}"),
+    ("PnL", "pnl_usd", "${:,.2f}"),
     ("open @fair", "open_pnl_at_fair_usd", "${:,.2f}"),
     ("open @bid", "open_pnl_at_bid_usd", "${:,.2f}"),
     ("|beta$delta| max", "bdd_max_abs_frac", "{:.0%}"),
@@ -121,10 +120,10 @@ def best_and_worst_days(daily: pd.DataFrame) -> dict:
 def run_one(model, dates: list[str], loader_factory) -> tuple[sim.Result, dict]:
     params = getattr(model, "params", None) or sim.Params()
     result = sim.run(model, params=params, loader=loader_factory())
-    m = sim.metrics(result)
-    m |= best_and_worst_days(sim.daily_pnl(result))
+    m = results.metrics(result)
+    m |= best_and_worst_days(results.daily_pnl(result))
     m["refusals"] = dict(getattr(model, "refusals", {}) or {})
-    sim.write_run(result, m)
+    results.write_run(result, m)
     return result, m
 
 
@@ -194,9 +193,7 @@ def combined_report(rows: list[dict], scores: pd.DataFrame, sample: dict,
         "",
         summary_table(rows),
         "",
-        "`PnL opt` is every fill; `PnL conf` counts only fills whose price level "
-        "was still showing at the next cycle (MODELS 4.2). Headline PnL is "
-        "resolved-only (MODELS 4.3); the open book is shown beside it at the "
+        "Headline PnL is resolved-only (MODELS 4.3); the open book is shown beside it at the "
         "model's fair and at the last bid. `worst day` is marked PnL.",
         "",
         _headline_warning(rows, sample),
@@ -278,8 +275,7 @@ def combined_report(rows: list[dict], scores: pd.DataFrame, sample: dict,
         lines += ["## The control", "",
                   f"`random_control` opened {control['positions_opened']:,} positions "
                   f"with no signal at all and resolved {control['positions_resolved']:,} "
-                  f"of them for ${control['pnl_usd']:,.2f} optimistic / "
-                  f"${control['pnl_confirmed_usd']:,.2f} confirmed. MODELS 4.5: if it "
+                  f"of them for ${control['pnl_usd']:,.2f}. MODELS 4.5: if it "
                   f"earns what the models earn, the window drifted.", ""]
     return "\n".join(lines)
 
@@ -307,11 +303,11 @@ def main(argv=None) -> int:
                           min_ev=args.min_ev, min_roi=args.min_roi, tag=args.tag)
     rows = [m for _, m in runs]
 
-    scores, sample = sim.universe_scores(dates)
+    scores, sample = results.universe_scores(dates)
     text = combined_report(rows, scores, sample, dates, time.time() - started)
     suffix = f"_{args.tag}" if args.tag else ""
-    out = sim.REPORTS / f"all_{dates[0]}_{dates[-1]}{suffix}.md"
-    sim.REPORTS.mkdir(parents=True, exist_ok=True)
+    out = results.REPORTS / f"all_{dates[0]}_{dates[-1]}{suffix}.md"
+    results.REPORTS.mkdir(parents=True, exist_ok=True)
     out.write_text(text)
     print(f"  wrote {out}", file=sys.stderr)
     print(summary_table(rows))

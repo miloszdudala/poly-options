@@ -11,8 +11,9 @@ import pandas as pd
 import pytest
 
 import daily
+import results
 import sim
-from sim import NO, YES, Params
+from sim import YES, Params
 
 REPO = Path(__file__).resolve().parent.parent.parent
 SCHEDULING = REPO / "scheduling"
@@ -133,8 +134,7 @@ def test_todays_capacity_counts_only_todays_cycles():
 
 def test_todays_exposure_closes_on_the_last_cycle_and_peaks_on_the_largest():
     """The close is what MODELS 5.2's band is a statement about; the peak is
-    what says whether the band held during the session. For `factor_neutral`
-    on 2026-09-16 those differ by a factor of five."""
+    what says whether the band held during the session."""
     equity = pd.DataFrame([
         {"date": "2026-09-16", "beta_dollar_delta": -200.0},
         {"date": "2026-09-16", "beta_dollar_delta": -991.0},
@@ -154,20 +154,19 @@ def test_a_date_the_model_did_not_trade_reports_nan_not_zero():
     assert np.isnan(out["bdd_close"]) and out["cycles"] == 0
 
 
-def fill(cycle_id, cost, confirmed):
+def fill(cycle_id, cost):
     return sim.Fill(cycle_id=cycle_id, filled_at=pd.Timestamp("2026-09-16T14:00:00Z"),
                     market_id="m1", outcome_index=YES, depth_rank=0, price=0.3,
                     shares=1.0, fee_usd=0.0, cost_usd=cost, level_size=10.0,
-                    limit_price=0.5, fair=0.4, fair_source="", reason="t",
-                    confirmed=confirmed, checked=True)
+                    limit_price=0.5, fair=0.4, fair_source="", reason="t")
 
 
-def test_todays_fills_count_only_today_and_only_confirmed_dollars():
-    fills = [fill("20260916T140000Z-a", 10.0, True),
-             fill("20260916T141500Z-b", 5.0, False),
-             fill("20260917T140000Z-c", 99.0, True)]
+def test_todays_fills_count_only_today():
+    fills = [fill("20260916T140000Z-a", 10.0),
+             fill("20260916T141500Z-b", 5.0),
+             fill("20260917T140000Z-c", 99.0)]
     out = daily.today_fills(result_with(fills=fills), "2026-09-16")
-    assert out == {"fills": 2, "confirmed_usd": 10.0}
+    assert out == {"fills": 2}
 
 
 # ------------------------------------------------------ 3. collector gaps
@@ -276,8 +275,7 @@ def settlement(win_prob, won, cost=100.0):
         settled_at=pd.Timestamp("2026-09-17T18:00:00Z"),
         cash_back_at=pd.Timestamp("2026-09-18T20:00:00Z"),
         payout_per_share=payout, payout_usd=payout * 10.0,
-        pnl_usd=payout * 10.0 - cost, payout_confirmed_usd=0.0,
-        pnl_confirmed_usd=-cost, capital_days=cost * 2.25)
+        pnl_usd=payout * 10.0 - cost, capital_days=cost * 2.25)
 
 
 def busy_run(name):
@@ -292,7 +290,7 @@ def busy_run(name):
                               "beta_dollar_delta": -500.0, "equity_fair_usd": 9_900.0,
                               "equity_bid_usd": 9_800.0}]),
         settlements=settlements)
-    m = sim.metrics(result)
+    m = results.metrics(result)
     m["model"] = name
     m["worst_day_usd"] = -12.0
     return result, m
@@ -342,7 +340,7 @@ def test_an_unbiased_sample_gets_no_warning():
 
 
 def test_a_run_with_nothing_resolved_still_produces_a_reliability_section():
-    text = daily.report("2026-09-16", [(result_with(), {"model": "m", **sim.metrics(
+    text = daily.report("2026-09-16", [(result_with(), {"model": "m", **results.metrics(
         result_with())})], ["2026-09-16"], [], pd.DataFrame(),
         {"selection_biased": False}, 1.0)
     assert "no resolved position yet" in text

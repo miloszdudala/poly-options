@@ -49,7 +49,7 @@ STALE_BOOK_S = 900.0     # a book untouched for longer than one cycle is a fossi
 # session its latest prints are the previous day's (2026-09-18 13:30Z and
 # 13:45Z: median quote age 63,015 s and 63,927 s, i.e. yesterday's close).
 # Yesterday's smile against today's spot is not a fair value; past this age the
-# chain is treated as absent and only the empirical fair is computed.
+# chain is treated as absent and the market is left unpriced.
 STALE_CHAIN_S = 1800.0
 
 
@@ -107,12 +107,8 @@ class TickerContext:
         self.f = empirical.estimate_intraday_share(ticker, DEFAULT_F,
                                                    as_of=reference_time)
         self.sigma_realised = float("nan")
-        self.table = None
         if len(past) > 60:
-            vol = empirical.ewma_vol(past["close"].values)
-            self.sigma_realised = float(vol[-1])
-            self.table = empirical.touch_table(past["high"].values, past["low"].values,
-                                               past["close"].values)
+            self.sigma_realised = float(empirical.ewma_vol(past["close"].values)[-1])
 
 
 def price_cycle(cycle_id: str, paths: int = fairlib.DEFAULT_PATHS,
@@ -230,17 +226,9 @@ def price_cycle(cycle_id: str, paths: int = fairlib.DEFAULT_PATHS,
         if already:
             flags.set("touch_pending", True)
             rows.append({**row, "fair_K": 1.0, "fair_atm": 1.0, "fair_cont": 1.0,
-                         "fair_empirical": 1.0, "delta": 0.0,
+                         "delta": 0.0,
                          "flags": flags.as_string(), **_flag_dict(flags)})
             continue
-
-        # --- empirical fair: no options, no implied vol (MODELS 3.5) ---
-        fair_emp = float("nan")
-        if ctx.table is not None and np.isfinite(ctx.sigma_realised) and ctx.sigma_realised > 0:
-            daily_move = (ctx.sigma_realised / math.sqrt(TRADING_DAYS)
-                          * math.sqrt(max(t_sessions, 1e-9)))
-            k = abs(math.log(barrier / spot)) / daily_move
-            fair_emp = float(ctx.table.lookup(k, t_sessions, "up" if is_up else "down"))
 
         # --- option-implied: two vols, two expiries, one deadline ---
         sym_chain = chain[chain["underlying"] == ticker]
@@ -319,7 +307,7 @@ def price_cycle(cycle_id: str, paths: int = fairlib.DEFAULT_PATHS,
                                                  rate, ctx.f, is_up, pool)
 
         rows.append({**row, "fair_K": fair_k, "fair_atm": fair_atm, "fair_cont": fair_cont,
-                     "fair_empirical": fair_emp, "delta": delta,
+                     "delta": delta,
                      "sigma_K": sigma_k, "sigma_atm": sigma_atm,
                      "spread_iv": abs(sigma_k - sigma_atm)
                      if np.isfinite(sigma_k) and np.isfinite(sigma_atm) else float("nan"),

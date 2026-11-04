@@ -26,6 +26,7 @@ import pytest
 import data
 import engine
 import ledger_schema
+import results
 import sim
 
 # --------------------------------------------------------------- thresholds
@@ -257,7 +258,7 @@ def test_bar_spot_agrees_with_cboe_s_delayed_price(fair, dates):
 
 
 def test_every_fair_value_is_a_probability_and_the_bound_holds(fair):
-    for col in ("fair_K", "fair_atm", "fair_cont", "fair_empirical"):
+    for col in ("fair_K", "fair_atm", "fair_cont"):
         vals = fair[col].dropna()
         assert ((vals >= 0) & (vals <= 1)).all(), f"{col} outside [0, 1]"
     both = fair[fair["fair_K"].notna() & fair["fair_cont"].notna() & ~fair["touch_pending"]]
@@ -449,16 +450,6 @@ def test_one_position_per_market_per_direction_per_model(fills):
     assert (cycles <= 1).all(), f"re-entered without the flag: {cycles[cycles > 1].index.tolist()[:5]}"
 
 
-def test_confirmed_fills_are_exactly_the_ones_whose_level_survived(fills):
-    checked = fills[fills["checked"].astype(bool)]
-    if checked.empty:
-        pytest.skip("no fill has had a next cycle yet")
-    expected = checked["next_level_size"] >= checked["shares"] - 1e-9
-    assert (checked["confirmed"].astype(bool) == expected).all()
-    unchecked = fills[~fills["checked"].astype(bool)]
-    assert not unchecked["confirmed"].astype(bool).any(), "an unchecked fill was marked confirmed"
-
-
 def test_every_position_respects_its_model_s_caps_at_every_cycle(marks):
     """From the per-cycle marks: cost per market, per ticker and per direction
     against MODELS 4.4 / section 5 caps, for every model, every cycle."""
@@ -550,7 +541,7 @@ def test_the_random_control_carries_no_forecast(fills):
 
 
 def test_the_daily_report_exists_for_the_newest_priced_date_and_warns(dates):
-    path = sim.REPORTS / f"daily_{dates[-1]}.md"
+    path = results.REPORTS / f"daily_{dates[-1]}.md"
     assert path.exists(), f"no daily report for {dates[-1]}: run model/daily.py"
     text = path.read_text()
     assert len(text.splitlines()) <= 120

@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from sessions import TRADING_DAYS, sessions_remaining
+from sessions import TRADING_DAYS
 
 SQRT_2 = math.sqrt(2.0)
 

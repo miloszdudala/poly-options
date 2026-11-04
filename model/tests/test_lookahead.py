@@ -4,7 +4,7 @@ The trap this file exists for is that a daily bar for session D is stamped
 `D 04:00Z` - midnight Eastern, *before* the session it summarises. So during
 D's own session `bar_time < now` is true and the bar's close, set at 16:00 ET,
 is visible at a 14:00Z cycle. Everything downstream of a daily bar inherits
-that: the EWMA volatility, the empirical touch table, `f`, and the betas.
+that: the EWMA volatility, `f`, and the betas.
 """
 from __future__ import annotations
 

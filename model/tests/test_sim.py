@@ -1,4 +1,4 @@
-"""The harness, on synthetic books: fills, the persistence check, resolution,
+"""The harness, on synthetic books: fills, resolution,
 the caps, and the rule that a model cannot see the future.
 
 Everything here is built in memory. A test that needs the Parquet store to
@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import results
 import sim
 from sim import YES, NO, LookaheadError, Order, Params
 
@@ -42,7 +43,7 @@ def fair_rows(cycle_id, rows):
     base = {"cycle_id": cycle_id, "market_id": "m1", "ticker": "NVDA",
             "contract_type": "hit_up", "barrier": 200.0, "period": "weekly",
             "fair_K": 0.40, "fair_atm": 0.40, "fair_cont": 0.45,
-            "fair_empirical": 0.40, "delta": 0.01, "spot": 190.0,
+            "delta": 0.01, "spot": 190.0,
             "deep_otm": False, "no_chain": False, "touch_pending": False,
             "stale_book": False,
             "deadline_utc": pd.Timestamp("2026-09-18T20:00:00Z")}
@@ -82,9 +83,8 @@ def test_all_in_cost_adds_the_fee_once():
     ("hit_up", NO, sim.SHORT_STOCK),
 ])
 def test_direction_is_the_stock_axis_not_the_yes_no_axis(contract_type, outcome, expected):
-    """MODELS 5.2b's table, which is the whole reason `balanced_book` exists:
-    a book of YES `hit_up` and NO `hit_down` is 'balanced' on YES/NO and
-    entirely long the market."""
+    """MODELS 5.2b's table: a book of YES `hit_up` and NO `hit_down` is
+    'balanced' on YES/NO and entirely long the market."""
     assert sim.direction_of(contract_type, outcome) == expected
 
 
@@ -244,95 +244,6 @@ def test_a_re_entry_resets_the_reference_fair_it_will_be_measured_against():
     assert capacity[0]["blocker"] == "no_averaging_down"
 
 
-# ------------------------------------------------------- persistence check
-
-
-def test_a_level_that_vanishes_next_cycle_never_makes_the_confirmed_ledger():
-    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
-    fills, _ = sim.execute(st, [order()])
-    sim.check_persistence(fills, book(CYCLE_B, [(0.31, 100.0)]))
-    assert [f.confirmed for f in fills] == [False]
-    assert [f.checked for f in fills] == [True]
-
-
-def test_a_level_that_shrinks_below_what_we_took_is_not_confirmed():
-    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
-    fills, _ = sim.execute(st, [order()])
-    assert fills[0].shares == pytest.approx(50.0)
-    sim.check_persistence(fills, book(CYCLE_B, [(0.30, 49.0)]))
-    assert fills[0].confirmed is False
-
-
-def test_a_level_still_showing_the_size_we_took_is_confirmed():
-    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
-    fills, _ = sim.execute(st, [order()])
-    sim.check_persistence(fills, book(CYCLE_B, [(0.30, 50.0)]))
-    assert fills[0].confirmed is True
-
-
-def test_a_fill_with_no_next_cycle_is_unchecked_not_assumed_good():
-    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
-    fills, _ = sim.execute(st, [order()])
-    sim.check_persistence(fills, pd.DataFrame())
-    assert fills[0].checked is False and fills[0].confirmed is False
-
-
-def recheck(asks, outcome_index=YES, market_id="m1"):
-    return pd.DataFrame([{"cycle_id": CYCLE_A, "market_id": market_id,
-                          "outcome_index": outcome_index, "price": p, "size": s}
-                         for p, s in asks])
-
-
-def test_the_recheck_confirms_an_order_still_buyable_under_its_limit():
-    """The level moved a tick, as repricing bots do; the bet was still there."""
-    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
-    fills, _ = sim.execute(st, [order(limit_price=0.40)])
-    sim.confirm_by_recheck(fills, recheck([(0.31, 60.0)]))
-    assert [f.confirmed for f in fills] == [True] and fills[0].checked
-
-
-def test_the_recheck_does_not_confirm_a_bet_that_moved_past_the_limit():
-    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
-    fills, _ = sim.execute(st, [order(limit_price=0.35)])
-    sim.confirm_by_recheck(fills, recheck([(0.36, 500.0)]))
-    assert [f.confirmed for f in fills] == [False] and fills[0].checked
-
-
-def test_the_recheck_needs_the_whole_size_and_confirms_best_levels_first():
-    st = state(books=book(CYCLE_A, [(0.30, 100.0), (0.32, 100.0)]))
-    fills, _ = sim.execute(st, [order(max_usd=100.0, limit_price=0.40)])
-    assert len(fills) == 2
-    taken_first = fills[0].shares
-    sim.confirm_by_recheck(fills, recheck([(0.33, taken_first + 1.0)]))
-    by_rank = sorted(fills, key=lambda f: f.depth_rank)
-    assert [f.confirmed for f in by_rank] == [True, False]
-
-
-def test_without_a_recheck_the_next_cycle_decides():
-    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
-    fills, _ = sim.execute(st, [order()])
-    sim.confirm_by_recheck(fills, pd.DataFrame())
-    assert fills[0].checked is False
-    sim.check_persistence(fills, book(CYCLE_B, [(0.30, 50.0)]))
-    assert fills[0].confirmed is True
-
-
-def test_the_recheck_keys_on_the_token_not_the_market():
-    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
-    fills, _ = sim.execute(st, [order(limit_price=0.40)])
-    sim.confirm_by_recheck(fills, recheck([(0.30, 100.0)], outcome_index=NO))
-    assert fills[0].confirmed is False
-
-
-def test_the_persistence_check_keys_on_the_token_not_the_market():
-    """NO ask is not 1 - YES ask, and a NO level at the same number must not
-    confirm a YES fill."""
-    st = state(books=book(CYCLE_A, [(0.30, 100.0)]))
-    fills, _ = sim.execute(st, [order()])
-    sim.check_persistence(fills, book(CYCLE_B, [(0.30, 100.0)], outcome_index=NO))
-    assert fills[0].confirmed is False
-
-
 # ------------------------------------------------------------- resolution
 
 
@@ -396,24 +307,6 @@ def test_capital_days_run_to_the_deadline_for_a_no():
     done = sim.settle(portfolio, resolutions, pd.Timestamp("2026-09-19T20:00:00Z"))
     # 2026-09-16T14:00Z to the 2026-09-18T20:00Z deadline is 2.25 days.
     assert done[0].capital_days == pytest.approx(30.0 * 2.25)
-
-
-def test_only_the_confirmed_shares_reach_the_confirmed_pnl():
-    portfolio, resolutions = settled_portfolio()
-    position = portfolio.open[("m1", YES)]
-    position.fills = [
-        sim.Fill(cycle_id=CYCLE_A, filled_at=position.entry_at, market_id="m1",
-                 outcome_index=YES, depth_rank=0, price=0.30, shares=60.0,
-                 fee_usd=0.72, cost_usd=18.72, level_size=200.0, limit_price=0.5,
-                 fair=0.4, fair_source="", reason="t", confirmed=True, checked=True),
-        sim.Fill(cycle_id=CYCLE_A, filled_at=position.entry_at, market_id="m1",
-                 outcome_index=YES, depth_rank=1, price=0.31, shares=40.0,
-                 fee_usd=0.50, cost_usd=12.90, level_size=200.0, limit_price=0.5,
-                 fair=0.4, fair_source="", reason="t", confirmed=False, checked=True),
-    ]
-    done = sim.settle(portfolio, resolutions, pd.Timestamp("2026-09-18T20:00:00Z"))
-    assert done[0].payout_confirmed_usd == pytest.approx(60.0)
-    assert done[0].pnl_confirmed_usd == pytest.approx(60.0 - 18.72)
 
 
 # ----------------------------------------------------------- no lookahead
@@ -544,22 +437,11 @@ def test_the_exposure_of_a_no_position_has_the_opposite_sign():
             contract_type="hit_down", barrier=180.0, deadline=pd.NaT, period="w",
             entry_cycle_id=CYCLE_A, entry_at=pd.Timestamp("2026-09-16T14:00:00Z"),
             entry_fair=0.4, shares=10.0, cost_usd=3.0)
-    fair = pd.DataFrame([{"market_id": "m0", "delta": -0.01, "spot": 200.0},
-                         {"market_id": "m1", "delta": -0.01, "spot": 200.0}])
-    betas = {"NVDA": 2.0}
     positions = list(portfolio.open.values())
-    exposures = [portfolio.position_beta_delta(p, fair, betas) for p in positions]
+    exposures = [sim.beta_dollar_delta(p, -0.01, 200.0, 2.0) for p in positions]
     assert exposures[0] == pytest.approx(-0.01 * 200 * 10 * 2.0)
     assert exposures[1] == pytest.approx(+0.01 * 200 * 10 * 2.0)
-    assert portfolio.beta_dollar_delta(fair, betas) == pytest.approx(0.0)
-
-
-def test_quadrant_totals_always_name_all_four():
-    """`balanced_book` compares against the smallest quadrant, so an empty one
-    has to be a zero and not a missing key."""
-    totals = sim.Portfolio(Params()).quadrant_totals()
-    assert set(totals) == {"hit_up_YES", "hit_up_NO", "hit_down_YES", "hit_down_NO"}
-    assert set(totals.values()) == {0.0}
+    assert sum(exposures) == pytest.approx(0.0)
 
 
 # ------------------------------------------------------- the whole replay
@@ -567,7 +449,7 @@ def test_quadrant_totals_always_name_all_four():
 
 class FakeLoader:
     """Two cycles, in memory. The level in the first cycle shrinks in the
-    second, which is the fixture MODELS 4.2's persistence check exists for."""
+    second."""
 
     def __init__(self, books_by_cycle, fair_by_cycle):
         self._books = books_by_cycle
@@ -617,8 +499,8 @@ def replay(monkeypatch, tmp_path):
     monkeypatch.setattr(sim.factors, "beta_table", lambda tickers, now: {"NVDA": 1.9})
     monkeypatch.setattr(sim.factors, "spy_intraday_return", lambda now: -0.002)
     monkeypatch.setattr(sim, "_latest_settlement", lambda: "2026-09-19T00:00:00Z")
-    monkeypatch.setattr(sim.ledger_schema, "STORE", tmp_path / "store")
-    monkeypatch.setattr(sim, "REPORTS", tmp_path / "reports")
+    monkeypatch.setattr(results.ledger_schema, "STORE", tmp_path / "store")
+    monkeypatch.setattr(results, "REPORTS", tmp_path / "reports")
     return FakeLoader(books, fair)
 
 
@@ -628,27 +510,14 @@ def test_the_replay_hands_each_cycle_once_in_order(replay):
     assert model.seen == [CYCLE_A, CYCLE_B]
 
 
-def test_a_level_that_shrank_between_cycles_is_filled_but_not_confirmed(replay):
+def test_a_level_that_shrank_by_the_next_cycle_still_counts_as_filled(replay):
     """The first cycle showed 100 at 0.30 and we took 50; the second cycle
-    shows 20. A live taker would have hit the first book, so the fill stands
-    in the optimistic ledger - and it is exactly the fill not to believe."""
+    shows 20. A fill counts if the book had the size when we looked
+    (CLAUDE.md, Decided), so the fill stands."""
     result = sim.run(BuyOnce(), loader=replay)
     at_thirty = [f for f in result.fills if f.price == pytest.approx(0.30)]
     assert len(at_thirty) == 1
-    assert at_thirty[0].checked is True
-    assert at_thirty[0].confirmed is False
-    m = sim.metrics(result)
-    assert m["fills"] > m["fills_confirmed"]
-    assert m["cost_confirmed_usd"] < m["cost_usd"]
-
-
-def test_a_recheck_in_the_replay_decides_before_the_next_cycle_can(replay):
-    """Same world as above, but the first cycle has a recheck showing the 0.30
-    level still deep: the 15-minute shrink no longer un-confirms it."""
-    replay.recheck = lambda cycle_id: (recheck([(0.30, 100.0), (0.40, 100.0)])
-                                       if cycle_id == CYCLE_A else pd.DataFrame())
-    result = sim.run(BuyOnce(), loader=replay)
-    assert all(f.checked and f.confirmed for f in result.fills)
+    assert at_thirty[0].shares == pytest.approx(50.0)
 
 
 def test_the_run_settles_what_has_resolved_since_the_last_cycle(replay):
@@ -663,7 +532,7 @@ def test_the_run_settles_what_has_resolved_since_the_last_cycle(replay):
 
 def test_the_report_and_the_ledger_are_written_where_they_are_asked_for(replay, tmp_path):
     result = sim.run(BuyOnce(), loader=replay)
-    paths = sim.write_run(result)
+    paths = results.write_run(result)
     assert paths["report"].exists()
     assert paths["report"].parent == tmp_path / "reports"
     assert (tmp_path / "store" / "ledger" / "buy_once" / "fills").exists()
@@ -675,7 +544,7 @@ def test_the_ledger_round_trips_through_its_own_schema(replay):
     import pyarrow.parquet as pq
 
     result = sim.run(BuyOnce(), loader=replay)
-    paths = sim.write_run(result)
+    paths = results.write_run(result)
     table = pq.read_table(paths["fills"])
     assert table.schema == sim.ledger_schema.FILLS
     assert table.num_rows == len(result.fills)
@@ -684,9 +553,9 @@ def test_the_ledger_round_trips_through_its_own_schema(replay):
 def test_a_rerun_replaces_the_ledger_rather_than_appending_to_it(replay):
     import pyarrow.parquet as pq
 
-    first = sim.write_run(sim.run(BuyOnce(), loader=replay))
+    first = results.write_run(sim.run(BuyOnce(), loader=replay))
     rows = pq.read_table(first["fills"]).num_rows
-    second = sim.write_run(sim.run(BuyOnce(), loader=replay))
+    second = results.write_run(sim.run(BuyOnce(), loader=replay))
     assert pq.read_table(second["fills"]).num_rows == rows
 
 
@@ -713,16 +582,14 @@ def test_a_peeking_model_fails_the_run_rather_than_quietly_cheating(replay):
 
 def test_a_position_records_the_fair_the_model_actually_traded_on():
     """MODELS 4.5 scores "mean fair of positions vs hit rate". For a model
-    whose signal is the empirical frequency, recording the engine's `fair_K`
-    scores a forecaster it never used. Measured on 2026-09-16: six
-    `empirical_longshot` positions recorded 0.32/0.41/0.40/0.39/0.56/0.56 when
-    the model had traded on 0.37/0.56/0.65/0.55/0.54/0.53."""
+    with its own fair, recording the engine's `fair_K` scores a forecaster it
+    never used."""
     st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
-               fair=fair_rows(CYCLE_A, [{"fair_K": 0.40, "fair_empirical": 0.62}]))
-    sim.execute(st, [order(fair=0.62, fair_source="empirical")])
+               fair=fair_rows(CYCLE_A, [{"fair_K": 0.40}]))
+    sim.execute(st, [order(fair=0.62, fair_source="own")])
     position = st.portfolio.open[("m1", YES)]
     assert position.entry_fair == pytest.approx(0.62)
-    assert position.fair_source == "empirical"
+    assert position.fair_source == "own"
 
 
 def test_the_engines_fair_is_kept_separately_for_the_re_entry_rule():
@@ -732,7 +599,7 @@ def test_the_engines_fair_is_kept_separately_for_the_re_entry_rule():
     one the report scores."""
     st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
                fair=fair_rows(CYCLE_A, [{"fair_K": 0.40}]))
-    sim.execute(st, [order(fair=0.62, fair_source="empirical")])
+    sim.execute(st, [order(fair=0.62, fair_source="own")])
     position = st.portfolio.open[("m1", YES)]
     assert position.entry_fair_engine == pytest.approx(0.40)
 
@@ -742,16 +609,6 @@ def test_the_engines_fair_is_kept_separately_for_the_re_entry_rule():
     _, capacity = sim.execute(later, [order(fair=0.62, reenter=True)])
     assert capacity[0]["blocker"] != "no_averaging_down"
     assert st.portfolio.open[("m1", YES)].entry_fair_engine == pytest.approx(0.55)
-
-
-def test_an_empirical_position_is_marked_on_the_empirical_fair():
-    """MODELS 4.3 marks the open book "at fair (model mark)". Marking a model
-    that refuses the option signal at the option signal is not its mark."""
-    st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
-               fair=fair_rows(CYCLE_A, [{"fair_K": 0.40, "fair_empirical": 0.62}]))
-    sim.execute(st, [order(fair=0.62, fair_source="empirical")])
-    marks = sim._marks(st, "run", "m", {"NVDA": 1.0})
-    assert marks[0]["fair"] == pytest.approx(0.62)
 
 
 def test_a_position_taken_on_the_conservative_fair_is_marked_the_same_way():
@@ -794,6 +651,6 @@ def test_the_concentration_percentages_state_the_dollars_they_are_a_share_of():
                         open_positions=list(st.portfolio.open.values()),
                         portfolio=st.portfolio, seconds=1.0,
                         settled_through="2026-09-18T00:00:00Z")
-    text = sim.report_markdown(result)
+    text = results.report_markdown(result)
     deployed = sum(p.cost_usd for p in result.open_positions)
     assert f"${deployed:,.2f} deployed" in text

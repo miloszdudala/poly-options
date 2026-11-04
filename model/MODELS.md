@@ -104,17 +104,8 @@ how much of the cheap NO could have been bought (INSIGHTS §7.1).
 
 ### Removed 2026-10-17
 
-Three models were dropped as not making sense, with their code and tests
-(git history has both). Their September results stay in the old reports.
-
-- **5.2 `factor_neutral`** (beta-dollar-delta band): rejected most
-  candidates, and its straddle preference added the long-vol exposure that
-  lost in a calm month. Flat.
-- **5.2b `balanced_book`** (four quadrants in equal dollars): equal dollars
-  are not equal risk, so to keep buying NO it had to buy YES. −28%.
-- **5.3 `empirical_longshot`** (historical touch rates instead of options):
-  learned from a far more volatile 2021–2025; its YES "middle" bets lost
-  −$5,732. −55%.
+Three models were dropped, with their code, tests and reports (git history
+has all of them).
 
 ### 5.2c `direction_balanced`: up against down
 

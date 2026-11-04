@@ -381,7 +381,7 @@ Too few to read either way.
   worse: picking the bets with the largest estimated edge picks the ones where
   the estimate is most likely too high (winner's curse), and the premium
   (§7.2) leans the same way.
-- **Equal dollars are not equal risk.** balanced_book balanced dollars per
+- **Equal dollars are not equal risk.** A removed model balanced dollars per
   quadrant. In a calm week $500 of NO at 93¢ earns $37 and $500 of YES at 30¢
   loses $500, so its "balanced" book was a large bet on movement. 09-28 shows
   it: 37 YES bets balanced up/down, a calm two days, −$2,026.
@@ -406,7 +406,7 @@ the test.
 2. `resolutions_upto` compared timestamps as text, so same-day settlements
    were invisible and the last day of a run never settled.
 3. `daily_bars` / `bars_5m` kept an arbitrary version of a bar stored twice,
-   so betas changed run to run and factor_neutral traded 115–141 fills on
+   so betas changed run to run and one model traded 115–141 fills on
    identical data. Now newest fetch wins.
 
 ### 7.6 Real-time option data would not have helped (measured 2026-10-17)
@@ -436,4 +436,12 @@ cross the bar (real-time took 28 more positions in edge_taker), compounded by
 path dependence, and should be read as noise around zero rather than as
 delayed data being better. **Conclusion: no evidence that premium option data
 pays for itself.** One month, one calm regime; re-test if markets turn
-volatile, when vol moves faster. Scripts: `model/experiments/realtime_options.py` and `realtime_compare.py`.
+volatile, when vol moves faster. The scripts (`model/experiments/realtime_*.py`)
+were removed 2026-11-04; git history has them.
+
+### 7.7 $50 books (2026-10-17) *(unapproved)*
+
+`model/experiments/small_book.py` (removed 2026-11-04, in git history) ran $50
+books that bought the best edges only, or weekly markets bought Monday to
+Wednesday / Monday to Tuesday, at EV bars 3/6/10/15c. Result over 4 weeks:
+noise-level differences.

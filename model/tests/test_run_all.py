@@ -3,18 +3,18 @@ that has to sit above a PnL measured on a window shorter than the markets.
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
 import run_all
+import results
 import sim
 
 
 def row(**kw):
     base = {"model": "m", "positions_opened": 3, "wanted_usd": 100.0,
-            "filled_usd": 50.0, "cost_confirmed_usd": 25.0, "positions_resolved": 2,
-            "pnl_usd": 1.0, "pnl_confirmed_usd": 0.5, "open_pnl_at_fair_usd": 0.0,
+            "filled_usd": 50.0, "positions_resolved": 2,
+            "pnl_usd": 1.0, "open_pnl_at_fair_usd": 0.0,
             "open_pnl_at_bid_usd": -1.0, "bdd_max_abs_frac": 0.1,
             "largest_ticker_share": 0.5, "worst_day_usd": -2.0}
     return {**base, **kw}
@@ -86,34 +86,33 @@ def test_universe_scores_reports_the_sample_beside_the_scores(monkeypatch):
     can print the table without having been handed the reason not to."""
     fair = pd.DataFrame([{
         "cycle_id": "20260916T140000Z-a", "market_id": "m1", "ticker": "NVDA",
-        "fair_K": 0.7, "fair_atm": 0.7, "fair_cont": 0.8, "fair_empirical": 0.6,
+        "fair_K": 0.7, "fair_atm": 0.7, "fair_cont": 0.8,
         "deadline_utc": pd.Timestamp("2026-09-30T20:00:00Z")}])
     outcomes = pd.DataFrame([{"market_id": "m1", "result": "Yes",
                               "outcome_prices": None,
                               "settled_at_utc": pd.Timestamp("2026-09-17T18:00:00Z")}])
     monkeypatch.setattr(sim.data, "fair_values", lambda date: fair)
     monkeypatch.setattr(sim.data, "resolutions_upto", lambda when: outcomes)
-    monkeypatch.setattr(sim, "_market_mids", lambda dates: pd.DataFrame(
+    monkeypatch.setattr(results, "_market_mids", lambda dates: pd.DataFrame(
         [{"market_id": "m1", "cycle_id": "20260916T140000Z-a", "market_mid": 0.9}]))
     monkeypatch.setattr(sim, "_latest_settlement", lambda: "2026-09-18T00:00:00Z")
 
-    scores, sample = sim.universe_scores(["2026-09-16"])
+    scores, sample = results.universe_scores(["2026-09-16"])
     assert sample["deadline_passed"] == 0
     assert sample["selection_biased"] is True
     assert sample["base_rate"] == 1.0
-    assert set(scores["estimate"]) == {"fair_K", "fair_atm", "fair_cont",
-                                       "fair_empirical", "market_mid"}
+    assert set(scores["estimate"]) == {"fair_K", "fair_atm", "fair_cont", "market_mid"}
     assert scores.set_index("estimate").loc["fair_K", "brier"] == pytest.approx(0.09)
 
 
 def test_a_model_report_says_when_every_resolved_market_was_a_touch():
-    note = sim._selection_note({"positions_resolved": 17, "resolved_yes_share": 1.0,
+    note = results._selection_note({"positions_resolved": 17, "resolved_yes_share": 1.0,
                                 "resolved_on_no": 14})
     assert "All 17" in note and "selection, not skill" in note
 
 
 def test_a_mixed_resolved_sample_gets_the_share_and_no_sermon():
-    note = sim._selection_note({"positions_resolved": 40, "resolved_yes_share": 0.35,
+    note = results._selection_note({"positions_resolved": 40, "resolved_yes_share": 0.35,
                                 "resolved_on_no": 20})
     assert "35%" in note and "selection" not in note
 

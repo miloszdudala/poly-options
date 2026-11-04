@@ -82,8 +82,6 @@ def positions_from(fills: pd.DataFrame) -> pd.DataFrame:
     """One row per (model, market, side): shares, all-in cost, average entry price."""
     fills = fills.assign(
         notional=fills["price"] * fills["shares"],
-        conf_shares=np.where(fills["confirmed"].fillna(False), fills["shares"], 0.0),
-        conf_cost=np.where(fills["confirmed"].fillna(False), fills["cost_usd"], 0.0),
         # the fair of the side bought, not of YES
         side_fair=np.where(fills["outcome_index"] == sim.YES, fills["fair"], 1.0 - fills["fair"]),
     )
@@ -93,8 +91,7 @@ def positions_from(fills: pd.DataFrame) -> pd.DataFrame:
                 barrier=("barrier", "first"), deadline_utc=("deadline_utc", "first"),
                 period=("period", "first"), opened=("filled_at_utc", "min"),
                 shares=("shares", "sum"), cost=("cost_usd", "sum"), fee=("fee_usd", "sum"),
-                notional=("notional", "sum"), fair_x_shares=("fair_x_shares", "sum"),
-                conf_shares=("conf_shares", "sum"), conf_cost=("conf_cost", "sum")))
+                notional=("notional", "sum"), fair_x_shares=("fair_x_shares", "sum")))
     pos["entry_price"] = pos["notional"] / pos["shares"]
     pos["entry_fair"] = pos["fair_x_shares"] / pos["shares"]
     pos["side"] = np.where(pos["outcome_index"] == sim.YES, "YES", "NO")
@@ -181,8 +178,6 @@ def value(pos: pd.DataFrame, books: pd.DataFrame, resolutions: pd.DataFrame,
     out["pnl_sell"] = out["val_sell"] - out["cost"]
     out["move_c"] = np.where(out["status"] == "open",
                              (out["val_ask"] / out["shares"] - out["entry_price"]) * 100, np.nan)
-    conf_frac = (out["conf_shares"] / out["shares"]).fillna(0.0)
-    out["pnl_ask_conf"] = conf_frac * out["val_ask"] - out["conf_cost"]
     return out
 
 
@@ -224,7 +219,6 @@ def summarize(v: pd.DataFrame) -> dict:
         "roi_ask": marked["pnl_ask"].sum() / marked["cost"].sum() if marked["cost"].sum() else np.nan,
         "pnl_sell": v["pnl_sell"].sum(),
         "roi_sell": v["pnl_sell"].sum() / cost if cost else np.nan,
-        "pnl_ask_conf": v["pnl_ask_conf"].sum(),
         "move_c": (live["move_c"].fillna(0) * w).sum() / w.sum() if w.sum() else np.nan,
         "frac_better": (live["move_c"] > 0).mean() if len(live) else np.nan,
         "unsold": (v["unsold"] * v["val_ask"] / v["shares"]).fillna(0).sum(),
@@ -232,7 +226,7 @@ def summarize(v: pd.DataFrame) -> dict:
 
 
 SUMMARY_HEAD = (f"{'model':<30}{'pos':>5}{'open':>6}{'cost':>10}{'settled':>10}"
-                f"{'open@ask':>10}{'total@ask':>11}{'ROI':>8}{'conf@ask':>10}"
+                f"{'open@ask':>10}{'total@ask':>11}{'ROI':>8}"
                 f"{'sell all':>10}{'ROI':>8}{'move':>8}{'better':>8}")
 
 
@@ -240,7 +234,7 @@ def summary_line(name: str, s: dict) -> str:
     better = f"{s['frac_better']:.0%}".rjust(8) if np.isfinite(s["frac_better"]) else "-".rjust(8)
     return (f"{name:<30}{s['n']:>5}{s['n_open']:>6}{'$' + format(s['cost'], ',.0f'):>10}"
             f"{_money(s['pnl_settled'])}{_money(s['pnl_open_ask'])}{_money(s['pnl_ask'], 11)}"
-            f"{_pct(s['roi_ask'], 8)}{_money(s['pnl_ask_conf'])}"
+            f"{_pct(s['roi_ask'], 8)}"
             f"{_money(s['pnl_sell'])}{_pct(s['roi_sell'], 8)}{_cents(s['move_c'], 8)}{better}")
 
 
@@ -333,7 +327,7 @@ def main(argv=None) -> int:
     print("open@ask  open positions marked at today's ask for the same side: today's")
     print("          price of the bet against what we paid (no spread is paid when held)")
     print("          (a market with no ask left is marked at its bid)")
-    print("total@ask settled + open@ask;  ROI on cost.  conf@ask: confirmed fills only")
+    print("total@ask settled + open@ask;  ROI on cost")
     print("sell all  every open share hit into the bid ladder now, net of taker fee;")
     print("          shares past visible depth count as 0. A floor, not the strategy")
     print("move      share-weighted (ask now - entry price) on open positions, ¢/share")

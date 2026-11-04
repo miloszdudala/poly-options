@@ -153,20 +153,6 @@ def books(cycle_id: str, contract_types: tuple[str, ...] = ("hit_up", "hit_down"
     return df
 
 
-def books_recheck(cycle_id: str) -> pd.DataFrame:
-    """The ask side of the second read of one cycle's books (`poly_books_recheck`,
-    ~40 s after the first, from 2026-10-16 17:00Z). Empty for cycles before it."""
-    root = PARQUET_DIR / "poly_books_recheck"
-    if not root.exists() or not any(root.rglob("*.parquet")):
-        return pd.DataFrame()
-    return _q(f"""
-        select cycle_id, fetched_at_utc, market_id, outcome_index, price, size
-        from {_src('poly_books_recheck')}
-        where cycle_id = '{cycle_id}' and side = 'ask'
-        order by market_id, outcome_index, price
-    """)
-
-
 def market_book_times(cycle_id: str) -> pd.DataFrame:
     """One row per market: its book timestamp, fetch time, and the age between.
 
@@ -187,16 +173,6 @@ def market_book_times(cycle_id: str) -> pd.DataFrame:
         df[col] = pd.to_datetime(df[col], format="ISO8601", utc=True, errors="coerce")
     df["book_age_s"] = (df["fetched_at_utc"] - df["book_timestamp_utc"]).dt.total_seconds()
     return df
-
-
-def top_of_book(cycle_id: str) -> pd.DataFrame:
-    """Best bid and ask per (market_id, outcome_index), with the size there."""
-    df = books(cycle_id)
-    top = df[df["depth_rank"] == 0]
-    wide = top.pivot_table(index=["market_id", "outcome_index"], columns="side",
-                           values=["price", "size"], aggfunc="first")
-    wide.columns = [f"{b}_{a}" for a, b in wide.columns]
-    return wide.reset_index()
 
 
 # ---------------------------------------------------------- option chain
@@ -275,7 +251,7 @@ def daily_bars(symbol: str) -> pd.DataFrame:
     """
     # "Newest" needs the fetch time in the sort: without it DuckDB's row order
     # decided which version survived, and it differs run to run - betas moved
-    # and factor_neutral traded 115-141 fills on the same data (2026-10-09).
+    # and one model traded 115-141 fills on the same data (2026-10-09).
     # Empty closes (a partial fetch on 09-18) never win.
     df = _q(f"""
         select symbol, bar_time_utc, open, high, low, close, volume, fetched_at_utc
@@ -298,8 +274,7 @@ def daily_bars_asof(symbol: str, as_of) -> pd.DataFrame:
     the session it summarises - so a naive `bar_time < now` filter hands a
     14:00Z cycle the 16:00 ET close of its own day. Measured 2026-09-16: that
     moved `sigma_realised` by up to 1.1 vol points (PLTR 0.692 against 0.703)
-    and every beta by up to 0.017, and put today's high and low into the
-    empirical touch table.
+    and every beta by up to 0.017.
 
     The cut is 16:00 **Eastern** on the bar's own date, done in the tz database
     so it follows DST without an offset written down anywhere. It is not the
