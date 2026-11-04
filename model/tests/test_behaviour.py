@@ -188,8 +188,7 @@ def test_option_quotes_are_the_expected_age_in_every_cycle(fair, fills):
     # A stale chain is expected for the first ~15-30 minutes of a session
     # (Cboe's delay: its latest prints are yesterday's). What must not happen
     # is an option fair built from one - engine.STALE_CHAIN_S.
-    priced = equities[(equities["fair_K"].notna() | equities["fair_atm"].notna())
-                      & ~equities["touch_pending"]]
+    priced = equities[equities["fair"].notna() & ~equities["touch_pending"]]
     stale = priced.groupby("cycle_id")["quote_age_s"].median()
     stale = stale[stale > QUOTE_AGE_RANGE_S[1]]
     assert stale.empty, f"option fairs built from a chain older than {QUOTE_AGE_RANGE_S[1]}s: {stale.round().to_dict()}"
@@ -257,16 +256,9 @@ def test_bar_spot_agrees_with_cboe_s_delayed_price(fair, dates):
 # ============================================================== 2. the engine
 
 
-def test_every_fair_value_is_a_probability_and_the_bound_holds(fair):
-    for col in ("fair_K", "fair_atm", "fair_cont"):
-        vals = fair[col].dropna()
-        assert ((vals >= 0) & (vals <= 1)).all(), f"{col} outside [0, 1]"
-    both = fair[fair["fair_K"].notna() & fair["fair_cont"].notna() & ~fair["touch_pending"]]
-    # fair_K is a 20k-path Monte Carlo; three standard errors, not a flat 0.2c,
-    # or a long-dated 14% barrier fails on noise (SPX 6200, 68 sessions).
-    tol = np.maximum(2e-3, 3 * np.sqrt(both["fair_K"] * (1 - both["fair_K"]) / 20_000))
-    below = both[both["fair_cont"] < both["fair_K"] - tol]
-    assert len(below) == 0, f"{len(below)} rows where the continuous bound is below fair_K"
+def test_every_fair_value_is_a_probability(fair):
+    vals = fair["fair"].dropna()
+    assert ((vals >= 0) & (vals <= 1)).all(), "fair outside [0, 1]"
 
 
 def test_a_market_s_deadline_never_moves_and_its_horizon_only_shrinks(fair):
@@ -285,7 +277,7 @@ def test_touch_pending_markets_carry_a_fair_of_one_and_no_option_signal_uses_the
     pending = fair[fair["touch_pending"]]
     if pending.empty:
         pytest.skip("no touch-pending market-cycles yet")
-    assert (pending["fair_K"] == 1.0).all()
+    assert (pending["fair"] == 1.0).all()
     keyed = set(zip(pending["cycle_id"], pending["market_id"]))
     traded = fills[[(c, m) in keyed for c, m in zip(fills["cycle_id"], fills["market_id"])]]
     assert traded.empty, f"{len(traded)} fills on touch-pending markets: {traded[['model', 'market_id', 'cycle_id']].head().to_dict('records')}"
@@ -342,12 +334,12 @@ def test_what_the_venue_resolves_yes_our_bars_also_saw(fair, venue):
 
 def test_fair_values_do_not_jump_between_cycles_without_a_reason(fair):
     """Same market, consecutive cycles, spot within 0.5% and the same session:
-    `fair_K` should not move by more than 0.25. Jumps mean the smile is being
+    `fair` should not move by more than 0.25. Jumps mean the smile is being
     built from a different set of contracts cycle to cycle (a filter on the
     edge) or the expiry pairing flipped."""
-    ordered = fair[fair["fair_K"].notna() & ~fair["touch_pending"]].sort_values(["market_id", "cycle_id"])
+    ordered = fair[fair["fair"].notna() & ~fair["touch_pending"]].sort_values(["market_id", "cycle_id"])
     g = ordered.groupby("market_id")
-    ordered["prev_fair"] = g["fair_K"].shift()
+    ordered["prev_fair"] = g["fair"].shift()
     ordered["prev_spot"] = g["spot"].shift()
     ordered["prev_T"] = g["T_sessions"].shift()
     same = ordered[ordered["prev_fair"].notna()
@@ -355,11 +347,11 @@ def test_fair_values_do_not_jump_between_cycles_without_a_reason(fair):
                    & (np.floor(ordered["T_sessions"]) == np.floor(ordered["prev_T"]))]
     if same.empty:
         pytest.skip("no consecutive cycle pairs yet")
-    jumped = same[(same["fair_K"] - same["prev_fair"]).abs() > MAX_FAIR_JUMP]
+    jumped = same[(same["fair"] - same["prev_fair"]).abs() > MAX_FAIR_JUMP]
     share = len(jumped) / len(same)
     assert share <= MAX_FAIR_JUMP_SHARE, (
         f"{len(jumped)} of {len(same)} consecutive pairs jumped more than {MAX_FAIR_JUMP}: "
-        f"{jumped[['ticker', 'barrier', 'cycle_id', 'prev_fair', 'fair_K']].head().to_dict('records')}")
+        f"{jumped[['ticker', 'barrier', 'cycle_id', 'prev_fair', 'fair']].head().to_dict('records')}")
 
 
 def test_the_store_matches_what_the_engine_computes_today(fair, dates):
@@ -368,28 +360,27 @@ def test_the_store_matches_what_the_engine_computes_today(fair, dates):
     replaying stale fair values - reprice with `run_fair.py --date`."""
     newest = sorted(set(fair.loc[fair["date"] == dates[-1], "cycle_id"]))[-1]
     frame, stats = engine.price_cycle(newest)
-    stored = fair[fair["cycle_id"] == newest][["market_id", "fair_K", "touch_pending"]]
-    merged = stored.merge(frame[["market_id", "fair_K", "touch_pending"]], on="market_id",
+    stored = fair[fair["cycle_id"] == newest][["market_id", "fair", "touch_pending"]]
+    merged = stored.merge(frame[["market_id", "fair", "touch_pending"]], on="market_id",
                           suffixes=("_store", "_now"))
-    both = merged[merged["fair_K_store"].notna() & merged["fair_K_now"].notna()]
-    diff = (both["fair_K_store"] - both["fair_K_now"]).abs().max()
-    assert diff < MAX_REPRICE_DIFF, f"store vs fresh reprice of {newest}: max |dfair_K| = {diff:.4g}"
+    both = merged[merged["fair_store"].notna() & merged["fair_now"].notna()]
+    diff = (both["fair_store"] - both["fair_now"]).abs().max()
+    assert diff < MAX_REPRICE_DIFF, f"store vs fresh reprice of {newest}: max |dfair| = {diff:.4g}"
     assert (merged["touch_pending_store"].astype(bool) == merged["touch_pending_now"].astype(bool)).all()
     assert stats["iv_checked"] > 0
     rate = stats["iv_disagreements"] / stats["iv_checked"]
     assert rate <= MAX_IV_DISAGREEMENT, f"IV disagrees with Cboe on {rate:.1%} of liquid strikes"
 
 
-def test_an_earnings_gap_is_always_repaired_or_excluded(fair, fills):
-    gap = fair[fair["earnings_gap"] & fair["fair_K"].notna() & ~fair["touch_pending"]]
+def test_an_earnings_gap_is_never_traded_on_the_option_signal(fair, fills):
+    gap = fair[fair["earnings_gap"] & fair["fair"].notna() & ~fair["touch_pending"]]
     if gap.empty:
         pytest.skip("no earnings-gap market-cycles yet")
-    unrepaired = gap[gap["vol_source"] != "pre_earnings_flat"]
-    keyed = set(zip(unrepaired["cycle_id"], unrepaired["market_id"]))
+    keyed = set(zip(gap["cycle_id"], gap["market_id"]))
     option_models = fills[fills["model"].isin(["edge_taker", "direction_balanced", "scenario_hedged"])]
     traded = option_models[[(c, m) in keyed for c, m in
                             zip(option_models["cycle_id"], option_models["market_id"])]]
-    assert traded.empty, f"{len(traded)} option-signal fills on an unrepaired earnings gap"
+    assert traded.empty, f"{len(traded)} option-signal fills on an earnings gap"
 
 
 # ============================================================== 3. the ledger
@@ -500,8 +491,7 @@ def _fair_row(keyed, cycle_id, market_id):
 
 
 def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
-    """A, B and B-simple: the recorded fair is the side-correct conservative
-    one, the market was neither deep OTM nor chainless, and the price paid
+    """A, B and B-simple: the recorded fair is the engine's, the market was neither deep OTM nor chainless, and the price paid
     cleared MODELS 5.1's EV and ROI bars against that fair."""
     keyed = _fair_at(fair)
     option = fills[fills["model"].str.startswith(("edge_taker", "direction_balanced", "scenario_hedged"))]
@@ -512,8 +502,7 @@ def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
         row = _fair_row(keyed, f.cycle_id, f.market_id)
         if row is None:
             bad.append((f.model, f.market_id, "no fair row")); continue
-        k, atm = float(row["fair_K"]), float(row["fair_atm"])
-        expect = min(k, atm) if f.outcome_index == YES else max(k, atm)
+        expect = float(row["fair"])
         if not np.isfinite(expect) or abs(expect - f.fair) > 1e-9:
             bad.append((f.model, f.market_id, f"fair {f.fair} != {expect}")); continue
         if bool(row["deep_otm"]) or bool(row["no_chain"]):

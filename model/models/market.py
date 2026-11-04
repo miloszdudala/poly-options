@@ -49,10 +49,9 @@ def _quoter(state, market_id: str, outcome_index: int, fair: float, fair_source:
 def holdings(state: sim.CycleState, memory: dict) -> list[Holding]:
     """The open positions, with the model's touch probability for each now.
 
-    The probability is the conservative engine number for the side held (the
-    smaller of fair_K / fair_atm for a YES, the larger for a NO, as the signal
-    uses). A market not priced this cycle keeps the last one seen, else the
-    one it was bought at. A market whose touch is pending has none.
+    The probability is the engine's `fair`. A market not priced this cycle
+    keeps the last one seen, else the one it was bought at. A market whose
+    touch is pending has none.
     """
     out = []
     for p in state.portfolio.open.values():
@@ -62,9 +61,9 @@ def holdings(state: sim.CycleState, memory: dict) -> list[Holding]:
         if row is not None and bool(row.get("touch_pending", False)):
             q = None
         elif row is not None:
-            k, atm = float(row.get("fair_K", np.nan)), float(row.get("fair_atm", np.nan))
-            if np.isfinite(k) and np.isfinite(atm):
-                q = min(k, atm) if p.outcome_index == sim.YES else max(k, atm)
+            fair = sim.engine_fair(row)
+            if np.isfinite(fair):
+                q = fair
                 memory[key] = q
         out.append(Holding(market_id=p.market_id, ticker=p.ticker, kind=p.contract_type,
                            side=_SIDE[p.outcome_index], shares=p.shares, cost=p.cost_usd,

@@ -1,10 +1,7 @@
 """NYSE session arithmetic, used by the engine.
 
 `sessions_remaining` is the one place where MODELS 3.3's "regular hours only"
-becomes a number, and everything downstream - the horizon of the Monte Carlo,
-T in Black-Scholes - is scaled by it. A fractional
-result also decides whether the Monte Carlo's first leg opens with an overnight
-gap, so the fraction is not decoration.
+becomes a number, and the horizon of every fair value is scaled by it.
 """
 import pandas as pd
 import pytest

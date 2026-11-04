@@ -29,7 +29,7 @@ def market(market_id, ticker, contract_type, *, yes_ask=0.20, yes_size=10_000.0,
 def priced(market_id, ticker, contract_type, *, fair=0.40, delta=0.01, spot=200.0,
            barrier=200.0, **extra):
     return {"market_id": market_id, "ticker": ticker, "contract_type": contract_type,
-            "fair_K": fair, "fair_atm": fair, "fair_cont": fair + 0.02,
+            "fair": fair,
             "delta": delta, "spot": spot, "barrier": barrier, **extra}
 
 
@@ -83,31 +83,15 @@ def test_a_orders_by_roi_so_the_cash_runs_out_on_the_worst_edge():
 # ------------------------------------------------ P6: the fair each model uses
 
 
-def test_a_records_the_conservative_fair_it_screened_on():
-    """Not `fair_K` alone: MODELS 5.1's bar is `min(fair_K, fair_atm)` and that
-    is the number the position was taken against."""
+def test_a_records_the_fair_it_screened_on():
     specs = [(market("m1", "NVDA", "hit_up", yes_ask=0.20),
               priced("m1", "NVDA", "hit_up", fair=0.40))]
     st = world(specs)
-    st.fair.loc[0, "fair_atm"] = 0.52
     orders = EdgeTaker().propose(st)
     sim.execute(st, orders)
     position = st.portfolio.open[("m1", YES)]
     assert position.entry_fair == pytest.approx(0.40)
-    assert position.fair_source == "min(fair_K,fair_atm)"
-
-
-def test_a_no_position_records_the_other_end_of_the_two_vols():
-    specs = [(market("m1", "NVDA", "hit_up", yes_ask=0.20, no_ask=0.30),
-              priced("m1", "NVDA", "hit_up", fair=0.40))]
-    st = world(specs)
-    st.fair.loc[0, "fair_atm"] = 0.52
-    orders = [o for o in EdgeTaker().propose(st) if o.outcome_index == NO]
-    assert orders, "the NO side should clear the bar at 30c against a 0.52 fair"
-    sim.execute(st, orders)
-    position = st.portfolio.open[("m1", NO)]
-    assert position.entry_fair == pytest.approx(0.52)
-    assert position.fair_source == "max(fair_K,fair_atm)"
+    assert position.fair_source == "atm"
 
 
 # ------------------------------------------ behaviour checks, 2026-09-18

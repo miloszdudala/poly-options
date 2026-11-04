@@ -27,13 +27,11 @@ sys.path.append(str(HERE.parent / "data" / "src"))   # see model/data.py
 import data  # noqa: E402
 import fair_schema  # noqa: E402
 from engine import price_cycle  # noqa: E402
-
-FLAG_COLUMNS = ["deep_otm", "clamped_strike", "clamped_atm", "single_expiry",
-                "exact_expiry", "no_chain", "stale_book", "earnings_inside",
-                "earnings_gap", "touch_pending"]
+from fair import Flags  # noqa: E402
 
 
-def run_date(date: str, paths: int, write: bool = True) -> tuple[pd.DataFrame, list[dict]]:
+
+def run_date(date: str, write: bool = True) -> tuple[pd.DataFrame, list[dict]]:
     """Recompute a whole date, replacing whatever was stored for it.
 
     The partition is cleared first. `write_fair` appends a part file per cycle,
@@ -49,7 +47,7 @@ def run_date(date: str, paths: int, write: bool = True) -> tuple[pd.DataFrame, l
             print(f"  cleared the existing {date} partition", file=sys.stderr)
     frames, stats = [], []
     for cycle_id in cycles:
-        frame, stat = price_cycle(cycle_id, paths=paths)
+        frame, stat = price_cycle(cycle_id)
         if len(frame):
             frames.append(frame)
             if write:
@@ -63,7 +61,7 @@ def run_date(date: str, paths: int, write: bool = True) -> tuple[pd.DataFrame, l
 def report(date: str, df: pd.DataFrame, stats: list[dict], elapsed: float) -> str:
     if df.empty:
         return f"{date}: no session cycles with books."
-    priced = df["fair_K"].notna()
+    priced = df["fair"].notna()
     lines = [
         f"{date}: {len(stats)} session cycles, {len(df):,} market-cycles, "
         f"{int(priced.sum()):,} priced ({priced.mean():.1%})",
@@ -80,22 +78,12 @@ def report(date: str, df: pd.DataFrame, stats: list[dict], elapsed: float) -> st
         "",
         "  flag              market-cycles     share",
     ]
-    for flag in FLAG_COLUMNS:
+    for flag in Flags.names():
         n = int(df[flag].fillna(False).astype(bool).sum())
         lines.append(f"  {flag:<18}{n:>10,}    {n / len(df):>7.1%}")
     lines += [
         "",
-        "  fair value        median    n",
-    ]
-    for col in ("fair_K", "fair_atm", "fair_cont"):
-        good = df[col].dropna()
-        lines.append(f"  {col:<18}{good.median():>6.3f}  {len(good):>6,}")
-    both = df[df["fair_K"].notna() & df["fair_cont"].notna()]
-    lines += [
-        "",
-        f"  fair_cont > fair_K in {(both['fair_cont'] > both['fair_K']).mean():.1%} of "
-        f"{len(both):,} priced market-cycles (MODELS 3.3: continuous monitoring is an "
-        f"upper bound), median excess {(both['fair_cont'] - both['fair_K']).median():+.4f}",
+        f"  fair              median {df['fair'].median():.3f}, n {int(priced.sum()):,}",
     ]
     return "\n".join(lines)
 
@@ -103,12 +91,11 @@ def report(date: str, df: pd.DataFrame, stats: list[dict], elapsed: float) -> st
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
-    parser.add_argument("--paths", type=int, default=20_000)
     parser.add_argument("--no-write", action="store_true")
     args = parser.parse_args(argv)
 
     started = time.time()
-    df, stats = run_date(args.date, args.paths, write=not args.no_write)
+    df, stats = run_date(args.date, write=not args.no_write)
     print(report(args.date, df, stats, time.time() - started))
     return 0
 

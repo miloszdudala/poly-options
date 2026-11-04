@@ -169,11 +169,11 @@ class Position:
     entry_at: pd.Timestamp
     #: The fair the model actually traded on, and the source it came from.
     #: MODELS 4.5 scores "mean fair of positions vs hit rate"; recording the
-    #: engine's `fair_K` here would score a forecaster a model may never have
+    #: engine's fair here would score a forecaster a model may never have
     #: used.
     entry_fair: float
     fair_source: str = ""
-    #: The engine's `fair_K` at entry, kept apart because MODELS 4.2's 10c
+    #: The engine's fair at entry, kept apart because MODELS 4.2's 10c
     #: re-entry test has to be evaluated by the harness at a later cycle and
     #: the harness cannot recompute a model's own signal.
     entry_fair_engine: float = float("nan")
@@ -243,24 +243,9 @@ class Portfolio:
         return None
 
 
-def model_fair(row, fair_source: str) -> float:
-    """The number a model would put on a position, given where its fair came from.
-
-    Screening is strict about a half-specified fair (`candidate_edges` refuses
-    it); marking is lenient, because an open position whose ATM vol went
-    missing this cycle is better marked on the strike vol than dropped from the
-    book's value altogether. The asymmetry is deliberate: one decides whether
-    to take risk, the other only decides what to call the risk already taken.
-    """
-    if row is None:
-        return float("nan")
-    k = float(row.get("fair_K", float("nan")))
-    atm = float(row.get("fair_atm", float("nan")))
-    if fair_source.startswith("min"):
-        return float(np.fmin(k, atm))
-    if fair_source.startswith("max"):
-        return float(np.fmax(k, atm))
-    return k
+def engine_fair(row) -> float:
+    """The engine's touch probability in a fair row, or NaN without one."""
+    return float("nan") if row is None else float(row.get("fair", float("nan")))
 
 
 def _row_for(fair_rows: pd.DataFrame, market_id: str):
@@ -344,11 +329,7 @@ def candidate_edges(state: CycleState, *, min_ev: float = 0.03, min_roi: float =
                     yes_premium: float = YES_RISK_PREMIUM) -> pd.DataFrame:
     """MODELS 5.1's bar, evaluated on both tokens of every priced market.
 
-    The conservative fair differs by side and that is not symmetry for its own
-    sake: a YES is worth `q` so the cautious `q` is the smaller of the two
-    engine numbers, and a NO is worth `1 - q` so the cautious `q` is the
-    larger. Taking `min` on both sides would make every NO look better than it
-    is, on exactly the markets where the two vols disagree most.
+    A YES is worth the engine's `fair` (the touch probability), a NO `1 - fair`.
 
     MODELS 2's second bar - ROI >= 2% above 90c instead of EV >= 3c - is here
     rather than in the models because A, B and B-simple share this signal
@@ -365,10 +346,10 @@ def candidate_edges(state: CycleState, *, min_ev: float = 0.03, min_roi: float =
     fair = state.fair
     if fair.empty:
         return pd.DataFrame()
-    cols = ["market_id", "ticker", "contract_type", "barrier", "fair_K", "fair_atm",
-            "fair_cont", "delta", "spot", "deep_otm", "no_chain",
+    cols = ["market_id", "ticker", "contract_type", "barrier", "fair",
+            "delta", "spot", "deep_otm", "no_chain",
             "touch_pending", "stale_book", "deadline_utc", "period",
-            "earnings_gap", "vol_source", "quote_age_s"]
+            "earnings_gap", "quote_age_s"]
     fair = fair[[c for c in cols if c in fair.columns]].copy()
     fair = fair[~fair["touch_pending"].fillna(False).astype(bool)]
     if exclude_deep_otm:
@@ -383,14 +364,11 @@ def candidate_edges(state: CycleState, *, min_ev: float = 0.03, min_roi: float =
         # book), the fair value knows something the book did not, and a fill
         # against that book is not one a taker could have made.
         fair = fair[~(fair["quote_age_s"] < 0)]
-    if "earnings_gap" in fair and "vol_source" in fair:
+    if "earnings_gap" in fair:
         # An earnings report between the deadline and the expiry the vol came
-        # from puts a jump in the vol the barrier never sees. The engine
-        # reprices off the pre-earnings expiry where one exists; where none
-        # does the fair is biased high and the option signal must not use it.
-        unrepaired = (fair["earnings_gap"].fillna(False).astype(bool)
-                      & (fair["vol_source"] != "pre_earnings_flat"))
-        fair = fair[~unrepaired]
+        # from puts a jump in the vol the barrier never sees: the fair is
+        # biased high and the option signal must not use it.
+        fair = fair[~fair["earnings_gap"].fillna(False).astype(bool)]
     if fair.empty:
         return pd.DataFrame()
 
@@ -402,14 +380,7 @@ def candidate_edges(state: CycleState, *, min_ev: float = 0.03, min_roi: float =
     fee = state.params.fee_rate
     merged["cost"] = merged["ask"] + fee * np.minimum(merged["ask"], 1.0 - merged["ask"])
     is_yes = merged["outcome_index"] == YES
-    k, atm = merged["fair_K"], merged["fair_atm"]
-    # `np.fmin` ignores NaN and returns the other argument, so a market priced
-    # off only one of the two vols would screen as though both agreed with it.
-    # MODELS 5.1's bar is undefined there; require both.
-    both = k.notna() & atm.notna()
-    q_cons = np.where(both, np.where(is_yes, np.fmin(k, atm), np.fmax(k, atm)), np.nan)
-    merged["fair"] = q_cons
-    merged["win_prob"] = np.where(is_yes, q_cons, 1.0 - q_cons)
+    merged["win_prob"] = np.where(is_yes, merged["fair"], 1.0 - merged["fair"])
     # The value the bar is judged on: a YES is charged the risk premium.
     merged["premium"] = np.where(is_yes, yes_premium, 0.0)
     value = merged["win_prob"] - merged["premium"]
@@ -430,8 +401,7 @@ def candidate_edges(state: CycleState, *, min_ev: float = 0.03, min_roi: float =
             & (merged["roi"] >= roi_bar) & (merged["cost"] < 1.0)
             & (merged["ask"] > 0))
     out = merged[keep].copy()
-    out["fair_source"] = np.where(out["outcome_index"] == YES, "min(fair_K,fair_atm)",
-                                  "max(fair_K,fair_atm)")
+    out["fair_source"] = "atm"
     return out.sort_values("roi", ascending=False).reset_index(drop=True)
 
 
@@ -517,14 +487,14 @@ def _market_meta(state: CycleState, market_id: str) -> dict | None:
         return {"ticker": row["ticker"], "contract_type": row["contract_type"],
                 "barrier": float(row["barrier"]), "deadline": row["deadline_utc"],
                 "period": row.get("period"),
-                "fair_K": float(row.get("fair_K", float("nan")))}
+                "fair": engine_fair(row)}
     book = state.books[state.books["market_id"] == market_id]
     if book.empty:
         return None
     first = book.iloc[0]
     return {"ticker": first["ticker"], "contract_type": first["contract_type"],
             "barrier": float(first["barrier"]), "deadline": first["end_date"],
-            "period": first.get("period"), "fair_K": float("nan")}
+            "period": first.get("period"), "fair": float("nan")}
 
 
 def execute(state: CycleState, orders: list[Order]) -> tuple[list[Fill], list[dict]]:
@@ -544,7 +514,7 @@ def execute(state: CycleState, orders: list[Order]) -> tuple[list[Fill], list[di
             continue
         existing = portfolio.open.get((order.market_id, order.outcome_index))
         if existing is not None:
-            moved = abs(float(meta["fair_K"]) - existing.entry_fair_engine)
+            moved = abs(meta["fair"] - existing.entry_fair_engine)
             allowed = (order.reenter and np.isfinite(moved)
                        and moved > params.reenter_fair_move)
             if not allowed:
@@ -555,7 +525,7 @@ def execute(state: CycleState, orders: list[Order]) -> tuple[list[Fill], list[di
             # entry's fair lets a fair oscillating 10c either side of it
             # re-enter every cycle, which is averaging down with extra steps -
             # measured on 2026-09-16 as five identical fills in one market.
-            existing.entry_fair_engine = float(meta["fair_K"])
+            existing.entry_fair_engine = meta["fair"]
 
         grant = budget_for(order, portfolio, params, meta["contract_type"], meta["ticker"])
         ladder = state.ladder(order.market_id, order.outcome_index)
@@ -577,7 +547,7 @@ def execute(state: CycleState, orders: list[Order]) -> tuple[list[Fill], list[di
                 period=str(meta.get("period") or ""), entry_cycle_id=state.cycle_id,
                 entry_at=state.now, entry_fair=float(order.fair),
                 fair_source=order.fair_source,
-                entry_fair_engine=float(meta["fair_K"]))
+                entry_fair_engine=meta["fair"])
             portfolio.open[position.key] = position
         for t in taken:
             fill = Fill(cycle_id=state.cycle_id, filled_at=state.now,
@@ -897,7 +867,7 @@ def _marks(state: CycleState, run_id: str, model: str, betas: dict) -> list[dict
     rows = []
     for position in state.portfolio.open.values():
         fair_row = _row_for(state.fair, position.market_id)
-        fair = model_fair(fair_row, position.fair_source)
+        fair = engine_fair(fair_row)
         delta = float(fair_row["delta"]) if fair_row is not None else float("nan")
         spot = float(fair_row["spot"]) if fair_row is not None else float("nan")
         bid = float(lookup.get(position.key, float("nan")))

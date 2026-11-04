@@ -42,7 +42,7 @@ def book(cycle_id, levels, *, market_id="m1", ticker="NVDA", contract_type="hit_
 def fair_rows(cycle_id, rows):
     base = {"cycle_id": cycle_id, "market_id": "m1", "ticker": "NVDA",
             "contract_type": "hit_up", "barrier": 200.0, "period": "weekly",
-            "fair_K": 0.40, "fair_atm": 0.40, "fair_cont": 0.45,
+            "fair": 0.40,
             "delta": 0.01, "spot": 190.0,
             "deep_otm": False, "no_chain": False, "touch_pending": False,
             "stale_book": False,
@@ -206,7 +206,7 @@ def test_one_market_one_direction_per_lifetime_by_default():
     assert capacity[0]["blocker"] == "no_averaging_down"
 
     moved = state(cycle_id=CYCLE_B, books=book(CYCLE_B, [(0.30, 1000.0)]),
-                  fair=fair_rows(CYCLE_B, [{"fair_K": 0.60}]),
+                  fair=fair_rows(CYCLE_B, [{"fair": 0.60}]),
                   portfolio=st.portfolio, params=st.params)
     _, capacity = sim.execute(moved, [order()])
     assert capacity[0]["blocker"] == "no_averaging_down"
@@ -219,7 +219,7 @@ def test_an_explicit_re_entry_still_needs_the_fair_to_have_moved_ten_cents():
     assert capacity[0]["blocker"] == "no_averaging_down"
 
     moved = state(cycle_id=CYCLE_B, books=book(CYCLE_B, [(0.30, 1000.0)]),
-                  fair=fair_rows(CYCLE_B, [{"fair_K": 0.60}]),
+                  fair=fair_rows(CYCLE_B, [{"fair": 0.60}]),
                   portfolio=st.portfolio, params=st.params)
     _, capacity = sim.execute(moved, [order(reenter=True)])
     assert capacity[0]["blocker"] != "no_averaging_down"
@@ -232,13 +232,13 @@ def test_a_re_entry_resets_the_reference_fair_it_will_be_measured_against():
     st = state(books=book(CYCLE_A, [(0.30, 1000.0)]), params=Params(cap_yes_usd=20.0))
     sim.execute(st, [order()])
     second = state(cycle_id=CYCLE_B, books=book(CYCLE_B, [(0.30, 1000.0)]),
-                   fair=fair_rows(CYCLE_B, [{"fair_K": 0.60}]),
+                   fair=fair_rows(CYCLE_B, [{"fair": 0.60}]),
                    portfolio=st.portfolio, params=st.params)
     sim.execute(second, [order(reenter=True)])
     assert st.portfolio.open[("m1", YES)].entry_fair_engine == pytest.approx(0.60)
 
     third = state(cycle_id=CYCLE_C, books=book(CYCLE_C, [(0.30, 1000.0)]),
-                  fair=fair_rows(CYCLE_C, [{"fair_K": 0.55}]),
+                  fair=fair_rows(CYCLE_C, [{"fair": 0.55}]),
                   portfolio=st.portfolio, params=st.params)
     _, capacity = sim.execute(third, [order(reenter=True)])
     assert capacity[0]["blocker"] == "no_averaging_down"
@@ -358,19 +358,17 @@ def test_resolutions_handed_to_a_model_are_only_the_settled_ones():
 # --------------------------------------------------------------- the signal
 
 
-def test_the_conservative_fair_differs_by_side():
-    """A YES is worth `q`, so the cautious `q` is the smaller of the engine's
-    two; a NO is worth `1 - q`, so the cautious `q` is the larger. Taking the
-    min on both sides would flatter every NO."""
+def test_yes_and_no_are_priced_off_the_same_fair():
+    """A YES is worth `fair`, a NO `1 - fair`: one number, both sides."""
     books = pd.concat([book(CYCLE_A, [(0.20, 1000.0)], outcome_index=YES),
                        book(CYCLE_A, [(0.20, 1000.0)], outcome_index=NO)])
-    fair = fair_rows(CYCLE_A, [{"fair_K": 0.30, "fair_atm": 0.50}])
+    fair = fair_rows(CYCLE_A, [{"fair": 0.40}])
     out = sim.candidate_edges(state(books=books, fair=fair))
     yes = out[out["outcome_index"] == YES].iloc[0]
     no = out[out["outcome_index"] == NO].iloc[0]
-    assert yes["fair"] == pytest.approx(0.30)
-    assert no["fair"] == pytest.approx(0.50)
-    assert no["win_prob"] == pytest.approx(0.50)
+    assert yes["win_prob"] == pytest.approx(0.40)
+    assert no["win_prob"] == pytest.approx(0.60)
+    assert set(out["fair_source"]) == {"atm"}
 
 
 def test_deep_otm_markets_are_not_tradeable_on_the_option_signal():
@@ -394,7 +392,7 @@ def test_the_bar_above_ninety_cents_is_roi_not_three_cents_of_ev():
     """MODELS section 2: above 90c the fee is small but the spread is the whole
     edge, so a 3c EV bar would refuse every NO worth buying."""
     books = book(CYCLE_A, [(0.93, 1000.0)], outcome_index=NO)
-    fair = fair_rows(CYCLE_A, [{"fair_K": 0.047, "fair_atm": 0.047}])
+    fair = fair_rows(CYCLE_A, [{"fair": 0.047}])
     out = sim.candidate_edges(state(books=books, fair=fair))
     assert len(out) == 1
     assert out.iloc[0]["ev"] < 0.03 and out.iloc[0]["roi"] >= 0.02
@@ -404,20 +402,20 @@ def test_the_same_edge_at_ninety_cents_fails_the_three_cent_bar():
     """The companion to the test above: it is the price that switches the bar,
     so the identical edge one cent lower is refused."""
     books = book(CYCLE_A, [(0.90, 1000.0)], outcome_index=NO)
-    fair = fair_rows(CYCLE_A, [{"fair_K": 0.077, "fair_atm": 0.077}])
+    fair = fair_rows(CYCLE_A, [{"fair": 0.077}])
     out = sim.candidate_edges(state(books=books, fair=fair))
     assert out.empty
 
 
 def test_a_market_below_the_bar_is_not_a_candidate():
     books = book(CYCLE_A, [(0.39, 1000.0)])
-    fair = fair_rows(CYCLE_A, [{"fair_K": 0.40, "fair_atm": 0.40}])
+    fair = fair_rows(CYCLE_A, [{"fair": 0.40}])
     assert sim.candidate_edges(state(books=books, fair=fair)).empty
 
 
 def test_the_limit_the_harness_walks_to_honours_both_bars():
     books = book(CYCLE_A, [(0.20, 1000.0)])
-    fair = fair_rows(CYCLE_A, [{"fair_K": 0.40, "fair_atm": 0.40}])
+    fair = fair_rows(CYCLE_A, [{"fair": 0.40}])
     row = sim.candidate_edges(state(books=books, fair=fair)).iloc[0]
     value = 0.40 - sim.YES_RISK_PREMIUM          # a YES pays the premium
     assert row["limit_price"] == pytest.approx(min(value - 0.03, value / 1.08))
@@ -582,10 +580,10 @@ def test_a_peeking_model_fails_the_run_rather_than_quietly_cheating(replay):
 
 def test_a_position_records_the_fair_the_model_actually_traded_on():
     """MODELS 4.5 scores "mean fair of positions vs hit rate". For a model
-    with its own fair, recording the engine's `fair_K` scores a forecaster it
+    with its own fair, recording the engine's fair scores a forecaster it
     never used."""
     st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
-               fair=fair_rows(CYCLE_A, [{"fair_K": 0.40}]))
+               fair=fair_rows(CYCLE_A, [{"fair": 0.40}]))
     sim.execute(st, [order(fair=0.62, fair_source="own")])
     position = st.portfolio.open[("m1", YES)]
     assert position.entry_fair == pytest.approx(0.62)
@@ -598,13 +596,13 @@ def test_the_engines_fair_is_kept_separately_for_the_re_entry_rule():
     the engine's fair, which it can, and that number is carried apart from the
     one the report scores."""
     st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
-               fair=fair_rows(CYCLE_A, [{"fair_K": 0.40}]))
+               fair=fair_rows(CYCLE_A, [{"fair": 0.40}]))
     sim.execute(st, [order(fair=0.62, fair_source="own")])
     position = st.portfolio.open[("m1", YES)]
     assert position.entry_fair_engine == pytest.approx(0.40)
 
     later = state(cycle_id=CYCLE_B, books=book(CYCLE_B, [(0.30, 1000.0)]),
-                  fair=fair_rows(CYCLE_B, [{"fair_K": 0.55}]),
+                  fair=fair_rows(CYCLE_B, [{"fair": 0.55}]),
                   portfolio=st.portfolio, params=st.params)
     _, capacity = sim.execute(later, [order(fair=0.62, reenter=True)])
     assert capacity[0]["blocker"] != "no_averaging_down"
@@ -613,8 +611,8 @@ def test_the_engines_fair_is_kept_separately_for_the_re_entry_rule():
 
 def test_a_position_taken_on_the_conservative_fair_is_marked_the_same_way():
     st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
-               fair=fair_rows(CYCLE_A, [{"fair_K": 0.40, "fair_atm": 0.55}]))
-    sim.execute(st, [order(fair=0.40, fair_source="min(fair_K,fair_atm)")])
+               fair=fair_rows(CYCLE_A, [{"fair": 0.40}]))
+    sim.execute(st, [order(fair=0.40, fair_source="atm")])
     marks = sim._marks(st, "run", "m", {"NVDA": 1.0})
     assert marks[0]["fair"] == pytest.approx(0.40)
 
@@ -624,18 +622,23 @@ def test_a_model_with_no_forecast_is_still_marked_on_the_engines_fair():
     but its open book still has to be worth something, or its equity curve
     collapses to cash."""
     st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
-               fair=fair_rows(CYCLE_A, [{"fair_K": 0.40}]))
+               fair=fair_rows(CYCLE_A, [{"fair": 0.40}]))
     sim.execute(st, [order(fair=float("nan"), fair_source="none")])
     marks = sim._marks(st, "run", "m", {"NVDA": 1.0})
     assert marks[0]["fair"] == pytest.approx(0.40)
     assert np.isnan(st.portfolio.open[("m1", YES)].entry_fair)
 
 
-def test_a_market_priced_off_only_one_of_the_two_vols_is_not_a_candidate():
-    """MODELS 5.1's bar is `min(fair_K, fair_atm)`, which is undefined when one
-    is missing. `np.fmin` returns the other rather than NaN, so a market with a
-    single vol would have been screened as if both agreed with it."""
-    fair = fair_rows(CYCLE_A, [{"fair_K": 0.40, "fair_atm": float("nan")}])
+def test_an_unpriced_market_is_not_a_candidate():
+    fair = fair_rows(CYCLE_A, [{"fair": float("nan")}])
+    assert sim.candidate_edges(state(books=book(CYCLE_A, [(0.20, 1000.0)]),
+                                     fair=fair)).empty
+
+
+def test_an_earnings_gap_is_not_a_candidate():
+    """An earnings report between the deadline and the expiry inflates the vol
+    the barrier never sees."""
+    fair = fair_rows(CYCLE_A, [{"earnings_gap": True}])
     assert sim.candidate_edges(state(books=book(CYCLE_A, [(0.20, 1000.0)]),
                                      fair=fair)).empty
 

@@ -36,12 +36,12 @@ def test_the_engine_schema_does_not_shadow_the_collectors():
 
 
 def test_every_declared_column_survives_a_round_trip(store):
-    row = _blank_row(fair_K=0.25, deep_otm=True, n_strikes_after=12, flags="deep_otm")
+    row = _blank_row(fair=0.25, deep_otm=True, n_strikes=12, flags="deep_otm")
     back = pd.read_parquet(fair_schema.write_fair([row], "2026-09-16"))
     assert list(back.columns) == [f.name for f in fair_schema.FAIR]
-    assert back["fair_K"].iloc[0] == pytest.approx(0.25)
+    assert back["fair"].iloc[0] == pytest.approx(0.25)
     assert bool(back["deep_otm"].iloc[0])
-    assert int(back["n_strikes_after"].iloc[0]) == 12
+    assert int(back["n_strikes"].iloc[0]) == 12
 
 
 def test_the_file_lands_in_the_dates_partition(store):
@@ -56,11 +56,11 @@ def test_empty_rows_write_nothing(store):
 
 def test_unparseable_numbers_become_null_rather_than_a_type_error(store):
     """A bad value must not take the type of a whole column with it."""
-    row = _blank_row(fair_K="not a number", quote_time_utc="NaT", n_strikes_after="")
+    row = _blank_row(fair="not a number", quote_time_utc="NaT", n_strikes="")
     back = pd.read_parquet(fair_schema.write_fair([row], "2026-09-16"))
-    assert pd.isna(back["fair_K"].iloc[0])
+    assert pd.isna(back["fair"].iloc[0])
     assert pd.isna(back["quote_time_utc"].iloc[0])   # written as an Arrow null
-    assert pd.isna(back["n_strikes_after"].iloc[0])
+    assert pd.isna(back["n_strikes"].iloc[0])
 
 
 def test_a_rerun_replaces_the_date_rather_than_doubling_it(store, monkeypatch):
@@ -72,5 +72,5 @@ def test_a_rerun_replaces_the_date_rather_than_doubling_it(store, monkeypatch):
     fair_schema.write_fair([_blank_row()], "2026-09-16")
     partition = store / "fair" / "date=2026-09-16"
     assert len(list(partition.glob("*.parquet"))) == 1
-    run_fair.run_date("2026-09-16", paths=100, write=True)
+    run_fair.run_date("2026-09-16", write=True)
     assert len(list(partition.glob("*.parquet"))) == 0

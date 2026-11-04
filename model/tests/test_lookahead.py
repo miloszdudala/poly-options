@@ -4,7 +4,7 @@ The trap this file exists for is that a daily bar for session D is stamped
 `D 04:00Z` - midnight Eastern, *before* the session it summarises. So during
 D's own session `bar_time < now` is true and the bar's close, set at 16:00 ET,
 is visible at a 14:00Z cycle. Everything downstream of a daily bar inherits
-that: the EWMA volatility, `f`, and the betas.
+that, here the betas.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import pandas as pd
 import pytest
 
 import data
-import empirical
 import factors
 
 MIDSESSION = pd.Timestamp("2026-09-16T14:00:00Z")
@@ -74,36 +73,6 @@ def test_todays_bar_becomes_visible_once_todays_session_has_closed(monkeypatch):
     monkeypatch.setattr(data, "daily_bars", lambda symbol: bars)
     after = pd.Timestamp("2026-09-16T21:00:00Z")
     assert list(data.daily_bars_asof("X", after)["close"]) == [101.0, 90.0]
-
-
-def test_the_realised_vol_a_cycle_sees_does_not_know_todays_close(monkeypatch):
-    """A 10% crash today must not raise the volatility a 14:00Z cycle prices on."""
-    quiet = [100.0 + 0.1 * i for i in range(400)]
-    dates = [d.date().isoformat() for d in pd.bdate_range("2025-01-02", periods=401)]
-    calm = synthetic(dates[:400], quiet)
-    crash = synthetic(dates[:401], quiet + [quiet[-1] * 0.90])
-    monkeypatch.setattr(data, "daily_bars", lambda symbol: crash)
-    cycle = pd.Timestamp(f"{dates[400]}T14:00:00Z")
-    seen = data.daily_bars_asof("X", cycle)
-    assert len(seen) == 400
-    assert empirical.ewma_vol(seen["close"].values)[-1] == pytest.approx(
-        empirical.ewma_vol(calm["close"].values)[-1])
-
-
-def test_the_intraday_variance_share_is_taken_as_of_the_cycle(monkeypatch):
-    """`f` enters every option fair value. Estimating it from the whole stored
-    sample lets a cycle in week one know how week eight traded."""
-    dates = [d.date().isoformat() for d in pd.bdate_range("2025-01-02", periods=300)]
-    closes = list(100 + np.cumsum(np.full(300, 0.05)))
-    opens = [c - 0.02 for c in closes]
-    monkeypatch.setattr(data, "daily_bars", lambda symbol: synthetic(dates, closes, opens=opens))
-    cycle = pd.Timestamp(f"{dates[200]}T14:00:00Z")
-    trimmed = data.daily_bars_asof("X", cycle)
-    assert len(trimmed) == 200
-    expected = empirical.intraday_variance_share(trimmed["open"].values,
-                                                 trimmed["close"].values)
-    got = empirical.estimate_intraday_share("X", 0.6, as_of=cycle)
-    assert got == pytest.approx(np.clip(expected, 0.05, 0.99))
 
 
 def test_a_beta_does_not_know_todays_close(monkeypatch):

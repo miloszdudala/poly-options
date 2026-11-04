@@ -39,33 +39,7 @@ def test_the_pltr_barrier_prices_where_findings_says_it_should(priced):
     frame, _ = priced
     row = _market(frame, PLTR_HIT_DOWN_165)
     assert row["contract_type"] == "hit_down" and row["barrier"] == 165.0
-    assert 0.20 <= row["fair_K"] <= 0.45
-
-
-def test_continuous_monitoring_overstates_the_same_barrier(priced):
-    """MODELS 3.3, on a real market rather than a constructed one."""
-    frame, _ = priced
-    row = _market(frame, PLTR_HIT_DOWN_165)
-    assert row["fair_cont"] > row["fair_K"]
-
-
-def test_continuous_monitoring_overstates_nearly_every_market(priced):
-    """The bound holds wherever it is measurable.
-
-    Below ~1c both numbers are smaller than the Monte Carlo's own standard
-    error at 20k paths, so the deep-OTM tail crosses the bound by 1e-4 in
-    either direction. That is sampling noise on a market MODELS 3.4 says not
-    to trade anyway; the test is about the markets a model would touch.
-    """
-    frame, _ = priced
-    both = frame[frame["fair_K"].notna() & frame["fair_cont"].notna()
-                 & ~frame["touch_pending"].astype(bool)]
-    assert len(both) > 100
-    tradeable = both[both["fair_K"] > 0.01]
-    assert len(tradeable) > 100
-    assert (tradeable["fair_cont"] >= tradeable["fair_K"]).all()
-    assert (both["fair_cont"] >= both["fair_K"] - 2e-3).all()
-    assert (both["fair_cont"] > both["fair_K"]).mean() > 0.9
+    assert 0.20 <= row["fair"] <= 0.45
 
 
 def test_a_down_barrier_has_negative_delta(priced):
@@ -108,7 +82,7 @@ def test_markets_already_beyond_their_barrier_are_flagged_not_priced(priced):
     pending = frame[frame["touch_pending"].astype(bool)]
     if pending.empty:
         pytest.skip("no touch-pending markets in this cycle")
-    assert (pending["fair_K"] == 1.0).all()
+    assert (pending["fair"] == 1.0).all()
     assert (pending["delta"] == 0.0).all()
 
 
@@ -138,26 +112,25 @@ def test_a_weekly_barrier_uses_the_expiry_that_matches_its_deadline(priced):
     """The Friday expiry and the Friday barrier end at the same instant."""
     frame, _ = priced
     row = _market(frame, PLTR_HIT_DOWN_165)
-    assert row["expiry_after"] == "2026-09-18"
+    assert row["expiry"] == "2026-09-18"
     assert bool(row["exact_expiry"])
 
 
-def test_the_engine_reports_both_vols_and_their_spread(priced):
+def test_the_engine_reports_the_vol_it_priced_on(priced):
     frame, _ = priced
     row = _market(frame, PLTR_HIT_DOWN_165)
-    assert np.isfinite(row["sigma_K"]) and np.isfinite(row["sigma_atm"])
-    assert row["spread_iv"] == pytest.approx(abs(row["sigma_K"] - row["sigma_atm"]))
+    assert np.isfinite(row["sigma_atm"]) and row["n_strikes"] > 0
 
 
 def test_pricing_is_reproducible(priced):
-    """Same cycle, same seed, same numbers: the draws are fixed, not sampled."""
+    """Same cycle, same numbers."""
     frame, _ = priced
     again, _ = engine.price_cycle(CYCLE)
-    merged = frame[["market_id", "fair_K"]].merge(again[["market_id", "fair_K"]],
-                                                  on="market_id", suffixes=("_a", "_b"))
+    merged = frame[["market_id", "fair"]].merge(again[["market_id", "fair"]],
+                                                on="market_id", suffixes=("_a", "_b"))
     both = merged.dropna()
     assert len(both) > 100
-    assert np.allclose(both["fair_K_a"], both["fair_K_b"])
+    assert np.allclose(both["fair_a"], both["fair_b"])
 
 
 def test_no_priced_market_had_its_barrier_printed_earlier_in_the_period(priced):
@@ -166,7 +139,7 @@ def test_no_priced_market_had_its_barrier_printed_earlier_in_the_period(priced):
     the market began being watched; the ones that have are `touch_pending`,
     worth 1."""
     frame, _ = priced
-    live = frame[frame["fair_K"].notna() & ~frame["touch_pending"].astype(bool)]
+    live = frame[frame["fair"].notna() & ~frame["touch_pending"].astype(bool)]
     assert len(live) > 100
     for row in live.itertuples():
         start = data.watch_start_for(row.market_id, row.deadline_utc, row.period)
@@ -181,13 +154,12 @@ def test_no_priced_market_had_its_barrier_printed_earlier_in_the_period(priced):
 def test_an_earnings_report_at_the_deadline_bell_is_a_gap_not_inside(priced):
     """MU reports 2026-09-30 after the close; its monthly deadline is that
     close; the expiry after is 2 October. The jump is in the option and not in
-    the barrier, so the fair is priced off the pre-earnings expiry."""
+    the barrier, so the market is flagged `earnings_gap` (and not traded)."""
     frame, _ = priced
     mu = frame[(frame["ticker"] == "MU") & (frame["period"] == "monthly")
-               & frame["fair_K"].notna() & frame["expiry_after"].notna()]
+               & frame["fair"].notna() & frame["expiry"].notna()]
     if mu.empty:
         pytest.skip("no priced MU monthly in this cycle")
     assert mu["earnings_gap"].all()
-    assert (mu["vol_source"] == "pre_earnings_flat").all()
     assert not mu["earnings_inside"].any()
     assert not frame["earnings_inside"].fillna(False).astype(bool).any()

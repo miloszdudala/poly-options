@@ -35,21 +35,17 @@ FAIR = pa.schema([pa.field(n, t) for n, t in [
     # what it is a fair value of
     ("market_id", S), ("ticker", S), ("contract_type", S), ("direction", S),
     ("barrier", F), ("period", S), ("end_date", S), ("deadline_utc", S),
-    # the three option-implied numbers
-    ("fair_K", F), ("fair_atm", F), ("fair_cont", F),
-    ("delta", F),
+    # the fair (P of a touch) and its spot sensitivity
+    ("fair", F), ("delta", F),
     # the inputs, so any row can be recomputed by hand
-    ("sigma_K", F), ("sigma_atm", F), ("spread_iv", F), ("sigma_realised", F), ("f", F),
-    ("spot", F), ("spot_source", S), ("rate", F),
-    ("T_sessions", F), ("T_years", F),
-    ("expiry_after", S), ("expiry_before", S), ("vol_source", S),
-    ("n_strikes_after", I), ("n_strikes_before", I),
+    ("sigma_atm", F), ("spot", F), ("spot_source", S), ("rate", F),
+    ("T_sessions", F), ("T_years", F), ("expiry", S), ("n_strikes", I),
     # the reasons not to believe it
     ("quote_age_s", F), ("book_age_s", F), ("book_timestamp_utc", S),
     ("quote_time_utc", S),
-    ("deep_otm", B), ("clamped_strike", B), ("clamped_atm", B),
-    ("single_expiry", B), ("exact_expiry", B), ("no_chain", B), ("stale_book", B),
-    ("earnings_inside", B), ("earnings_gap", B), ("touch_pending", B), ("flags", S),
+    ("deep_otm", B), ("clamped_atm", B), ("exact_expiry", B), ("no_chain", B),
+    ("stale_book", B), ("earnings_inside", B), ("earnings_gap", B),
+    ("touch_pending", B), ("flags", S),
 ]])
 
 

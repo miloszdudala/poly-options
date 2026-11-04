@@ -325,7 +325,7 @@ def universe_scores(dates: list[str], settle_through: str | None = None):
     joined = joined.merge(mids, on=["cycle_id", "market_id"], how="left")
 
     rows = []
-    for name in ("fair_K", "fair_atm", "fair_cont", "market_mid"):
+    for name in ("fair", "market_mid"):
         if name not in joined:
             continue
         subset = joined[joined[name].notna()]

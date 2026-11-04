@@ -86,7 +86,7 @@ def test_universe_scores_reports_the_sample_beside_the_scores(monkeypatch):
     can print the table without having been handed the reason not to."""
     fair = pd.DataFrame([{
         "cycle_id": "20260916T140000Z-a", "market_id": "m1", "ticker": "NVDA",
-        "fair_K": 0.7, "fair_atm": 0.7, "fair_cont": 0.8,
+        "fair": 0.7,
         "deadline_utc": pd.Timestamp("2026-09-30T20:00:00Z")}])
     outcomes = pd.DataFrame([{"market_id": "m1", "result": "Yes",
                               "outcome_prices": None,
@@ -101,8 +101,8 @@ def test_universe_scores_reports_the_sample_beside_the_scores(monkeypatch):
     assert sample["deadline_passed"] == 0
     assert sample["selection_biased"] is True
     assert sample["base_rate"] == 1.0
-    assert set(scores["estimate"]) == {"fair_K", "fair_atm", "fair_cont", "market_mid"}
-    assert scores.set_index("estimate").loc["fair_K", "brier"] == pytest.approx(0.09)
+    assert set(scores["estimate"]) == {"fair", "market_mid"}
+    assert scores.set_index("estimate").loc["fair", "brier"] == pytest.approx(0.09)
 
 
 def test_a_model_report_says_when_every_resolved_market_was_a_touch():
