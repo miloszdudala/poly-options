@@ -31,7 +31,8 @@ SKIP_NO_EXPIRY = "no expiry at the deadline"
 SKIP_NO_STRIKES = "no call strikes either side of the level"
 SKIP_NO_CHAIN = "no fresh option chain"
 SKIP_NO_TERMS = "no market terms"
-SKIP_NO_OPEN = "no opening price yet"
+SKIP_NO_PREVIOUS_CLOSE = "no previous close"
+SKIP_OPENS_MARKET = "decided at the open, not the close"
 SKIP_QUOTE_AFTER_BOOK = "option quote newer than the book"
 #: Index option roots that settle on the morning's opening prints. On a third
 #: Friday they share an expiry date with SPXW / NDXP, which settle at the close.
@@ -93,7 +94,7 @@ class ChainPriced(bet_types.Polymarket):
         if self._terms is None:
             self._terms = data._q(f"""
                 select market_id, ticker, contract_type, strike, range_low, range_high,
-                       direction, period, end_date, outcome_0, outcome_1
+                       direction, period, end_date, outcome_0, outcome_1, event_slug
                 from (select *, row_number() over (partition by market_id
                                                    order by fetched_at_utc desc) rn
                       from {data._src('poly_markets')}

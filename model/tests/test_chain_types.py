@@ -124,16 +124,33 @@ def test_an_open_ended_range_leans_one_way(monkeypatch):
     assert out.iloc[0]["yes_direction"] == "down"
 
 
-def test_up_down_strikes_at_the_days_open(monkeypatch):
+def up_down_bars():
+    return pd.DataFrame({"symbol": "NVDA",
+                         "bar_time": pd.to_datetime(["2026-09-15T19:55:00Z",
+                                                     "2026-09-16T13:30:00Z"], utc=True),
+                         "open": [98.5, 200.0], "close": [99.0, 201.0]})
+
+
+def test_up_down_strikes_at_the_previous_close(monkeypatch):
     years = (pd.Timestamp("2026-09-16T20:00:00Z") - NOW).total_seconds() / (365 * 86400)
     chain = calls(pd.Timestamp("2026-09-16"), years=years)
-    bars = pd.DataFrame({"symbol": "NVDA", "bar_time": [pd.Timestamp("2026-09-16T13:30:00Z")],
-                         "open": [99.0]})
-    monkeypatch.setattr(data, "session_bars_5m", lambda symbol: bars)
+    monkeypatch.setattr(data, "session_bars_5m", lambda symbol: up_down_bars())
     _, out = priced(monkeypatch, "poly-up-down-daily-stock", "up_down", "daily",
                     {"outcome_0": "Up", "outcome_1": "Down"}, "2026-09-16T23:59:59", chain)
     assert out.iloc[0]["fair"] == pytest.approx(n_d2(99.0, years), abs=2e-3)
     assert out.iloc[0]["yes_direction"] == "up"
+
+
+def test_an_opens_up_or_down_market_is_skipped_and_counted(monkeypatch):
+    years = (pd.Timestamp("2026-09-16T20:00:00Z") - NOW).total_seconds() / (365 * 86400)
+    chain = calls(pd.Timestamp("2026-09-16"), years=years)
+    monkeypatch.setattr(data, "session_bars_5m", lambda symbol: up_down_bars())
+    bet_type, out = priced(monkeypatch, "poly-up-down-daily-stock", "up_down", "daily",
+                           {"outcome_0": "Up", "outcome_1": "Down",
+                            "event_slug": "spx-opens-up-or-down-on-september-16-2026"},
+                           "2026-09-16T23:59:59", chain)
+    assert out.empty
+    assert bet_type.skipped == {"decided at the open, not the close": 1}
 
 
 def test_an_up_down_market_settles_on_its_label(monkeypatch):

@@ -32,7 +32,7 @@ data) is in `INSIGHTS.md` §1–4 and §6. Code comments citing "MODELS §3.x" o
 |---|---|---|
 | `poly-hit-weekly-stock`, `poly-hit-monthly-stock` | Polymarket "hit $B" on stocks | continuous one-touch, ATM vol of the first expiry at or after the deadline (`engine.py`) |
 | `poly-close-above-{daily,weekly,monthly}-stock` | "close above $K" | call spread at the expiry equal to the deadline |
-| `poly-up-down-daily-stock` | "Up or Down"; strike = the day's open | call spread at that day's expiry |
+| `poly-up-down-daily-stock` | "Up or Down"; strike = the previous trading day's close; "Opens Up or Down" skipped | call spread at that day's expiry |
 | `poly-range-weekly-stock` | "close at $L–$H" | difference of two call-spread close-aboves |
 | `kalshi-index-daily-sp500`, `kalshi-index-daily-ndx` | Kalshi KXINX/KXINXU, KXNASDAQ100/KXNASDAQ100U | SPX / NDX call spread at the expiry equal to the observation time |
 | `poly-hit-monthly-wti` | Polymarket "WTI hit $B" | one-touch with USO vol at the same moneyness × the WTI/USO vol ratio, on the contract Active at the deadline |
