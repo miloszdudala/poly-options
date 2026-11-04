@@ -82,6 +82,7 @@ def summary(result: sim.Result) -> dict:
     out = {"model": result.model, "type": result.type, "account": result.account,
            "cycles": len(result.cycles), "settled_through": result.settled_through,
            "seconds": round(result.seconds, 1), "skipped": dict(result.skipped),
+           "note": result.note,
            "bets": int(len(bets))}
     if bets.empty:
         return out | {"money_in": 0.0, "fees": 0.0, "promised_ev": 0.0, "settled": 0,
@@ -323,7 +324,7 @@ def report_markdown(result: sim.Result, m: dict | None = None) -> str:
         f"# {result.model} on {result.type} ({result.account}) - {start} to {end}",
         "",
         f"{m['cycles']:,} cycles, {m['seconds']}s. Outcomes read through "
-        f"`{m['settled_through']}`.",
+        f"`{m['settled_through']}`." + (f" {result.note}" if result.note else ""),
         "",
         "## Promised against realised",
         "",

@@ -100,6 +100,11 @@ def combined_report(rows: list[dict], scores: pd.DataFrame, sample: dict,
         headline_warning(rows, sample),
         "",
     ]
+    notes = {r["type"]: r["note"] for r in rows if r.get("note")}
+    if notes:
+        lines += ["## Notes on types", ""]
+        lines += [f"- **{t}**: {n}" for t, n in sorted(notes.items())]
+        lines.append("")
     skipped = [r for r in rows if r.get("skipped")]
     if skipped:
         lines += ["## Markets skipped", ""]

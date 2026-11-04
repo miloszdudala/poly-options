@@ -19,7 +19,8 @@ What the harness asks of a type, per cycle:
 * `fee(price)` - the venue's fee per share at that price;
 * `resolutions(upto)` - every market that had settled by `upto`, with
   `market_id`, `result` ('Yes' / 'No'), `outcome_prices`, `settled_at_utc`;
-* `skipped` - market counts left out, by reason, for the report.
+* `skipped` - market counts left out, by reason, for the report;
+* `note` - a caveat the reports print beside the type's numbers.
 
 `period` ('daily', 'weekly' or 'monthly') sets the budget period of the
 `budget` account and the period the report groups by.
@@ -36,6 +37,7 @@ YES_INDEX, NO_INDEX = 0, 1
 class Type:
     name = ""
     period = "weekly"
+    note = ""
 
     def __init__(self):
         self.skipped: dict[str, int] = {}

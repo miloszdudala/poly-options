@@ -345,6 +345,7 @@ class Result:
     seconds: float
     settled_through: str
     skipped: dict
+    note: str = ""
 
     @property
     def fills(self) -> list[Fill]:
@@ -408,7 +409,7 @@ def run(model, bet_type, account: Account, dates: list[str],
                   period=bet_type.period, cycles=cycles,
                   positions=closed + list(open_positions.values()),
                   seconds=time.time() - started, settled_through=str(through),
-                  skipped=dict(bet_type.skipped))
+                  skipped=dict(bet_type.skipped), note=bet_type.note)
 
 
 def _fill(order: Order, behind: dict, open_positions: dict, held: set, account: Account,
