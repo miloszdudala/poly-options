@@ -15,7 +15,7 @@ any real money.
 
 | what | placeholder now | where |
 |---|---|---|
-| strategy | `edge_taker`'s rule only: every edge, best ROI first. No option for `direction_balanced` or `scenario_hedged` | `strategy.py`, `trader.py` |
+| strategy | `edge_taker`'s rule only: every edge, best ROI first (`direction_balanced` and `scenario_hedged` no longer exist in `model/`) | `strategy.py`, `trader.py` |
 | EV bar | 6¢ (`min_ev`) | `config.yaml` |
 | ROI bar | 8% (`min_roi`) | `config.yaml` |
 | above 90¢ | a 2% ROI bar replaces the EV bar, so NOs at 92–95¢ with 2–3¢ of edge pass (the dry runs bought exactly these) | `config.yaml` |
@@ -146,12 +146,20 @@ so the week shows what would have been bought and what it would have cost.
 the collector in `data/` and its store, which both read and neither owns.
 `pricing_engine/` is a copy of the model's engine, and a test fails when
 the two differ, so taking a later engine fix is a deliberate step (see its
-README). `strategy.py` is a copy of
-`sim.candidate_edges` and `sim.walk_ladder` for the same reason.
+README). `strategy.py` was copied from `sim.candidate_edges` and
+`sim.walk_ladder` for the same reason.
 
-As copied, live differs from the replays in only these ways: flat $5 caps
-instead of $150 YES / $500 NO, no re-entry, the venue's 5-share minimum, and
-fair values moved to the current spot between snapshots.
+**Since the refactor of 2026-11-04 the copy is out of date** (whether it stays
+a separate copy is Open in `CLAUDE.md`). `model/` now prices hit markets with
+the continuous one-touch and the ATM vol of the first expiry at or after the
+deadline, one fair for both sides; `pricing_engine/` still has the
+regular-hours Monte Carlo, the barrier-strike vol and the min/max rule, and
+`strategy.py` still follows `sim.candidate_edges`, which no longer exists. The
+replays also have no per-market caps now (`max` account). So live differs
+from the replays in its pricing as well as in what follows: flat $5 caps, no
+re-entry, the venue's 5-share minimum, and fair values moved to the current
+spot between snapshots. `test_the_engine_copy_matches_model` fails for
+`engine`, `fair`, `sessions` and `data` until this is decided.
 
 ## Not yet known, and how you will find out
 
@@ -160,7 +168,10 @@ fair values moved to the current spot between snapshots.
   than 5% over what was asked, the trader writes `live/STOP` and halts.
   Check the first live fill in `store/orders.jsonl` by eye.
 - **The wallet the API trades from.** See step 3 of setup.
-- **The fee.** The venue charges `0.04 × p × (1−p)` per share. Decisions use
+- **The fee.** The venue charges `0.04 × p × (1−p)` per share. *(Flagged
+  2026-11-04: the top-level README reads the stored `fee_schedule`, exponent
+  1, as `0.04 × min(p, 1−p)`. The two descriptions conflict; which one the
+  venue applies now was not checked.)* Decisions use
   the replays' `0.04 × min(p, 1−p)`, which is higher (2× at 50¢, 11% at
   90¢), so live clears the same bar the replays did. `fee_model: venue`
   switches to the real formula.

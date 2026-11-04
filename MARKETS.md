@@ -1,11 +1,13 @@
 # Prediction-market vs options data collection — market list
 
-Goal of this stage: collect time-stamped snapshots only. No trading, no model fitting.
-Everything below is read-only public data.
+The original collection spec (September 2026), kept as written except where
+marked. Everything below is read-only public data. Since then the hit markets
+became the main product, and `model/` prices and simulates every market kind
+listed here (`model/MODELS.md`, types); `live/` trades.
 
 ## 1. Polymarket markets
 
-### Tier A — "close above" monthly ladders (pure digitals, primary)
+### Tier A — "close above" monthly ladders (pure digitals; primary in the original spec, now ~19¢ wide, README)
 Known event slug pattern: `{ticker}-above-in-{month}-{year}` (e.g. `tsla-above-in-september-2026`).
 Verified for September 2026: 13 strikes each.
 
@@ -26,7 +28,7 @@ Verified for September 2026: 13 strikes each.
 
 Discovery must also run for future months (October ladders are not listed yet) and must not rely only on the slug pattern: search all open events whose title matches `close above ___ end of`.
 
-### Tier B — "hit" monthly markets (one-touch barriers, secondary)
+### Tier B — "hit" monthly markets (one-touch barriers; secondary in the original spec, now the main product)
 Titles of the form `What will <name> (<TICKER>) hit in September 2026?`:
 ABNB, GOOGL, AMZN, AAPL, COIN, META, MU, MSFT, NVDA, NFLX, OPEN, PLTR, HOOD, RKLB, SPY, SPCX, TSLA, EWY, MSTR (near-zero liquidity).
 Exclude SKHY (SK hynix; no US-listed options).
@@ -35,6 +37,7 @@ Exclude SKHY (SK hynix; no US-listed options).
 `What will Gold (XAUUSD) hit in September 2026?`, `What will Silver (XAGUSD) hit in September 2026?`,
 `What will WTI Crude Oil (WTI) hit in September 2026?`, `What will US Dollar Index (DXY) hit in September 2026?`.
 Parse and store the resolution source from the rules text; the options benchmark is decided later.
+*(Since decided for WTI: USO options, `CLAUDE.md`. Gold, silver and the dollar index are Open.)*
 
 ### Weekly / daily series (discovery required)
 Earlier scans showed weekly events such as `What will S&P 500 (SPY) hit Week of September 14 2026?`,
@@ -75,6 +78,7 @@ Also store the underlying spot with its timestamp.
 - Schedule: every 15 minutes during US regular hours (09:30–16:00 America/New_York; use the tz database, do not
   hard-code Singapore offsets). Polymarket and Kalshi may additionally be sampled hourly outside those hours.
 - Storage: SQLite, one table per venue plus an options table and a market-metadata table.
+  *(Not what was built: the store is Parquet under `data/store/parquet/`, one directory per table, README.)*
 - Each run is a short script (fetch → append → exit) scheduled by launchd on macOS. Log every failed request.
 - Retries with backoff and randomised pauses; yfinance is unofficial and throttles.
 
@@ -102,7 +106,8 @@ rose from 56% to 88%, which looks like rotation until you notice it is a bigger
 slice of a much smaller pie.
 
 So the thing to watch for before trusting these markets again is a
-**category-wide** recovery, not flow rotating back into close-above. Monthly
+**category-wide** recovery, not flow rotating back into close-above
+*(unapproved)*. Monthly
 close-above ladders were simply not listed for May 2026, which is worth knowing
 before reading a zero as a collapse.
 
