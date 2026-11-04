@@ -5,8 +5,8 @@
     .venv/bin/python model/review.py --positions     # also list every open position
 
 Weeks and months are those of the position's first fill, in New York time
-(a week starts on Monday). The models are the current ones in MODEL_ORDER;
-ledgers of removed models still on disk are left out.
+(a week starts on Monday). Each ledger is one model on one type, shown as
+`model / type` (with the account when it is not `max`).
 
 Reads the ledgers the last `run_all.py` / `daily.py` wrote and the newest book
 snapshot in the store. Nothing is replayed, so the ledgers are only as fresh
@@ -43,7 +43,6 @@ import data  # noqa: E402
 import sim  # noqa: E402
 
 LEDGER = HERE / "store" / "ledger"
-MODEL_ORDER = ["edge_taker", "direction_balanced", "scenario_hedged", "random_control"]
 # A book older than this behind the newest cycle is flagged: the market has
 # probably stopped accepting orders and its last quote is a fossil.
 STALE_AFTER = pd.Timedelta(hours=2)
@@ -74,6 +73,8 @@ def load_fills() -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
+    df["model"] = df["model"] + " / " + df["type"] + np.where(
+        df["account"] == "max", "", " (" + df["account"] + ")")
     df["filled_at_utc"] = pd.to_datetime(df["filled_at_utc"], format="ISO8601", utc=True)
     return df
 
@@ -82,19 +83,17 @@ def positions_from(fills: pd.DataFrame) -> pd.DataFrame:
     """One row per (model, market, side): shares, all-in cost, average entry price."""
     fills = fills.assign(
         notional=fills["price"] * fills["shares"],
-        # the fair of the side bought, not of YES
-        side_fair=np.where(fills["outcome_index"] == sim.YES, fills["fair"], 1.0 - fills["fair"]),
     )
-    fills["fair_x_shares"] = fills["side_fair"] * fills["shares"]
+    fills["fair_x_shares"] = fills["win_prob"] * fills["shares"]
     pos = (fills.groupby(["model", "market_id", "outcome_index"], as_index=False)
            .agg(ticker=("ticker", "first"), contract_type=("contract_type", "first"),
-                barrier=("barrier", "first"), deadline_utc=("deadline_utc", "first"),
+                level=("level", "first"), deadline_utc=("deadline_utc", "first"),
                 period=("period", "first"), opened=("filled_at_utc", "min"),
                 shares=("shares", "sum"), cost=("cost_usd", "sum"), fee=("fee_usd", "sum"),
                 notional=("notional", "sum"), fair_x_shares=("fair_x_shares", "sum")))
     pos["entry_price"] = pos["notional"] / pos["shares"]
     pos["entry_fair"] = pos["fair_x_shares"] / pos["shares"]
-    pos["side"] = np.where(pos["outcome_index"] == sim.YES, "YES", "NO")
+    pos["side"] = np.where(pos["outcome_index"] == 0, sim.YES, sim.NO)
     return pos.drop(columns=["notional", "fair_x_shares"])
 
 
@@ -148,7 +147,7 @@ def value(pos: pd.DataFrame, books: pd.DataFrame, resolutions: pd.DataFrame,
                "no_ask": False}
         if p.market_id in res.index:
             r = res.loc[p.market_id]
-            payout = sim._payout_per_share(r["result"], r["outcome_prices"], p.outcome_index)
+            payout = sim.payout_per_share(r["result"], r["outcome_prices"], p.side)
             if payout is not None:
                 out |= {"status": "settled", "payout": payout,
                         "val_ask": p.shares * payout, "val_sell": p.shares * payout}
@@ -258,14 +257,14 @@ def print_positions(v: pd.DataFrame) -> None:
     live = v[v["status"] != "settled"].sort_values("pnl_ask")
     if live.empty:
         return
-    print(f"    {'ticker':<7}{'type':<9}{'barrier':>9}{'deadline':>12}{'side':>5}"
+    print(f"    {'ticker':<7}{'type':<9}{'level':>9}{'deadline':>12}{'side':>5}"
           f"{'shares':>9}{'entry':>7}{'fair':>7}{'ask':>7}{'bid':>7}{'move':>8}"
           f"{'@ask':>9}{'sell':>9}")
     for p in live.itertuples():
         flag = (" stale" if p.stale else " NO BOOK" if p.status == "no book"
                 else " no ask, marked at bid" if p.no_ask else "")
         fmt = lambda x: f"{x:.3f}".rjust(7) if np.isfinite(x) else "-".rjust(7)  # noqa: E731
-        print(f"    {p.ticker:<7}{p.contract_type:<9}{p.barrier:>9g}{str(p.deadline_utc)[:10]:>12}"
+        print(f"    {p.ticker:<7}{p.contract_type:<9}{p.level:>9g}{str(p.deadline_utc)[:10]:>12}"
               f"{p.side:>5}{p.shares:>9,.0f}{fmt(p.entry_price)}{fmt(p.entry_fair)}"
               f"{fmt(p.ask)}{fmt(p.bid)}{_cents(p.move_c, 8)}{_money(p.pnl_ask, 9)}"
               f"{_money(p.pnl_sell, 9)}{flag}")
@@ -287,7 +286,6 @@ def main(argv=None) -> int:
     run_ids = sorted(fills["run_id"].dropna().unique())
     last_fill = fills["filled_at_utc"].max()
 
-    fills = fills[fills["model"].isin(MODEL_ORDER)]
     pos = positions_from(fills)
     if args.month:
         start = pd.Timestamp(f"{args.month}-01", tz=EASTERN)
@@ -318,7 +316,7 @@ def main(argv=None) -> int:
     print()
 
     print(_bold(SUMMARY_HEAD))
-    models = [m for m in MODEL_ORDER if m in set(v["model"])]
+    models = sorted(set(v["model"]))
     stats = {m: summarize(v[v["model"] == m]) for m in models}
     for m in models:
         print(summary_line(m, stats[m]))

@@ -35,8 +35,8 @@ FAIR = pa.schema([pa.field(n, t) for n, t in [
     # what it is a fair value of
     ("market_id", S), ("ticker", S), ("contract_type", S), ("direction", S),
     ("barrier", F), ("period", S), ("end_date", S), ("deadline_utc", S),
-    # the fair (P of a touch) and its spot sensitivity
-    ("fair", F), ("delta", F),
+    # the fair: the probability of a touch
+    ("fair", F),
     # the inputs, so any row can be recomputed by hand
     ("sigma_atm", F), ("spot", F), ("spot_source", S), ("rate", F),
     ("T_sessions", F), ("T_years", F), ("expiry", S), ("n_strikes", I),

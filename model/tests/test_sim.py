@@ -1,659 +1,465 @@
-"""The harness, on synthetic books: fills, resolution,
-the caps, and the rule that a model cannot see the future.
+"""The harness, on synthetic books: offers, fills, accounts, settlement, and
+the formats for models and types.
 
-Everything here is built in memory. A test that needs the Parquet store to
-decide whether a fee is right is testing the store.
+Everything here is built in memory. `FakeType` stands in for a real type: it
+serves fixed books, fair values and resolutions per cycle.
 """
 from __future__ import annotations
 
-import numpy as np
+import math
+import textwrap
+
 import pandas as pd
 import pytest
 
+import bet_types
 import results
+import run
 import sim
-from sim import YES, NO, LookaheadError, Order, Params
+from models import ANY_PRICE, NO, TODAYS_BAR, YES, Bar, Book, Model, Order
 
-CYCLE_A = "20260916T140000Z-aaaaaa"
-CYCLE_B = "20260916T141500Z-bbbbbb"
-CYCLE_C = "20260916T143000Z-cccccc"
-
-BOOK_COLUMNS = ["cycle_id", "fetched_at_utc", "book_timestamp_utc", "market_id",
-                "token_id", "ticker", "contract_type", "barrier", "strike",
-                "end_date", "period", "outcome", "outcome_index", "side",
-                "depth_rank", "price", "size"]
+MON = "20260914T140000Z-aaaaaa"      # Monday 14 Sep 2026, 10:00 ET
+TUE = "20260915T140000Z-bbbbbb"
+NEXT_MON = "20260921T140000Z-cccccc"
+DEADLINE = pd.Timestamp("2026-09-18T20:00:00Z")
 
 
-def book(cycle_id, levels, *, market_id="m1", ticker="NVDA", contract_type="hit_up",
-         barrier=200.0, outcome_index=YES, side="ask", end_date="2026-09-18T20:00:00Z"):
-    """`levels` is [(price, size), ...] in depth order."""
-    now = pd.Timestamp(f"2026-09-16T{cycle_id[9:11]}:{cycle_id[11:13]}:00Z")
-    return pd.DataFrame([{
-        "cycle_id": cycle_id, "fetched_at_utc": now, "book_timestamp_utc": now,
-        "market_id": market_id, "token_id": f"{market_id}-{outcome_index}",
-        "ticker": ticker, "contract_type": contract_type, "barrier": barrier,
-        "strike": None, "end_date": pd.Timestamp(end_date), "period": "weekly",
-        "outcome": "Yes" if outcome_index == YES else "No",
-        "outcome_index": outcome_index, "side": side, "depth_rank": rank,
-        "price": price, "size": size,
-    } for rank, (price, size) in enumerate(levels)], columns=BOOK_COLUMNS)
+def stamp(cycle_id: str) -> pd.Timestamp:
+    return pd.Timestamp(sim.data.cycle_start(cycle_id))
 
 
-def fair_rows(cycle_id, rows):
-    base = {"cycle_id": cycle_id, "market_id": "m1", "ticker": "NVDA",
-            "contract_type": "hit_up", "barrier": 200.0, "period": "weekly",
-            "fair": 0.40,
-            "delta": 0.01, "spot": 190.0,
-            "deep_otm": False, "no_chain": False, "touch_pending": False,
-            "stale_book": False,
-            "deadline_utc": pd.Timestamp("2026-09-18T20:00:00Z")}
-    return pd.DataFrame([{**base, **row} for row in rows])
+def asks(cycle_id, market_id="m1", yes=((0.30, 100.0),), no=((0.75, 100.0),)):
+    """Ask ladders for both tokens of one market, best price first."""
+    rows = []
+    for index, levels in ((0, yes), (1, no)):
+        for rank, (price, size) in enumerate(levels):
+            rows.append({"cycle_id": cycle_id, "fetched_at_utc": stamp(cycle_id),
+                         "market_id": market_id, "outcome_index": index, "side": "ask",
+                         "depth_rank": rank, "price": price, "size": size})
+    return pd.DataFrame(rows)
 
 
-def state(cycle_id=CYCLE_A, books=None, fair=None, portfolio=None, params=None,
-          betas=None, spy_intraday=0.0, loader=None, resolutions=None):
-    params = params or Params()
-    portfolio = portfolio if portfolio is not None else sim.Portfolio(params)
-    return sim.CycleState(
-        cycle_id=cycle_id, now=pd.Timestamp("2026-09-16T14:00:00Z"),
-        books=books if books is not None else book(cycle_id, [(0.30, 100.0)]),
-        fair=fair if fair is not None else fair_rows(cycle_id, [{}]),
-        resolutions=resolutions if resolutions is not None else pd.DataFrame(),
-        portfolio=portfolio, betas=betas or {"NVDA": 1.9},
-        spy_intraday=spy_intraday, params=params, loader=loader)
+def priced(market_id="m1", fair=0.40, ticker="NVDA", up=True, **extra):
+    return {"market_id": market_id, "ticker": ticker, "deadline": DEADLINE, "fair": fair,
+            "yes_direction": "up" if up else "down", "yes_vol": "wild",
+            "contract_type": "hit_up" if up else "hit_down", "level": 200.0,
+            "period": "weekly", **extra}
 
 
-# ------------------------------------------------------------ the arithmetic
+class FakeType(bet_types.Polymarket):
+    """Fixed books, fairs and resolutions; Polymarket's fee."""
+
+    name = "fake"
+    period = "weekly"
+
+    def __init__(self, cycles: dict, resolutions: list[dict] | None = None):
+        super().__init__()
+        self._cycles = cycles
+        self._resolutions = pd.DataFrame(resolutions or [], columns=[
+            "market_id", "result", "outcome_prices", "settled_at_utc"])
+
+    def cycles(self, dates):
+        return sorted(self._cycles)
+
+    def books(self, cycle_id):
+        return self._cycles[cycle_id][0]
+
+    def priced(self, cycle_id):
+        return pd.DataFrame(self._cycles[cycle_id][1])
+
+    def resolutions(self, upto):
+        frame = self._resolutions
+        return frame[pd.to_datetime(frame["settled_at_utc"], utc=True) <= pd.Timestamp(upto)]
+
+
+def resolved(market_id="m1", result="Yes", when="2026-09-18T20:00:00Z"):
+    return {"market_id": market_id, "result": result, "outcome_prices": None,
+            "settled_at_utc": pd.Timestamp(when)}
+
+
+class TakeAll(Model):
+    """A throwaway model, written here to prove the format is enough: it takes
+    every offer, as large as the book allows."""
+
+    name = "take_all"
+    bar = TODAYS_BAR
+
+    def decide(self, offers, book):
+        return [Order(bet, usd=bet.max_usd) for bet in offers]
+
+
+class Recorder(TakeAll):
+    """Takes everything, and keeps what it was shown."""
+
+    name = "recorder"
+
+    def __init__(self):
+        self.seen: list[tuple[list, Book]] = []
+
+    def decide(self, offers, book):
+        self.seen.append((list(offers), book))
+        return super().decide(offers, book)
+
+
+def replay(cycles, resolutions=None, model=None, account=None):
+    model = model or TakeAll()
+    return sim.run(model, FakeType(cycles, resolutions), account or sim.MaxAccount(), [],
+                   settle_through="2026-12-31T00:00:00Z")
+
+
+# ------------------------------------------------------------------ the bar
 
 
 def test_the_fee_is_four_percent_of_the_cheaper_side():
-    assert sim.fee_per_share(0.30) == pytest.approx(0.012)
-    assert sim.fee_per_share(0.95) == pytest.approx(0.002)
-    assert sim.fee_per_share(0.50) == pytest.approx(0.02)
+    fee = FakeType({}).fee
+    assert fee(0.30) == pytest.approx(0.012)
+    assert fee(0.95) == pytest.approx(0.002)
+    assert fee(0.50) == pytest.approx(0.02)
 
 
-def test_all_in_cost_adds_the_fee_once():
-    assert sim.all_in_cost(0.30) == pytest.approx(0.312)
+def test_todays_bar_is_unchanged():
+    """EV >= 3c and return >= 8%; above 90c, return >= 2%; YES pays 2c first."""
+    assert (TODAYS_BAR.min_ev, TODAYS_BAR.min_roi) == (0.03, 0.08)
+    assert (TODAYS_BAR.dear_price, TODAYS_BAR.dear_min_ev, TODAYS_BAR.dear_min_roi) == (0.90, 0.0, 0.02)
+    assert TODAYS_BAR.yes_premium == 0.02
 
 
-@pytest.mark.parametrize("contract_type,outcome,expected", [
-    ("hit_up", YES, sim.LONG_STOCK),
-    ("hit_down", NO, sim.LONG_STOCK),
-    ("hit_down", YES, sim.SHORT_STOCK),
-    ("hit_up", NO, sim.SHORT_STOCK),
-])
-def test_direction_is_the_stock_axis_not_the_yes_no_axis(contract_type, outcome, expected):
-    """MODELS 5.2b's table: a book of YES `hit_up` and NO `hit_down` is
-    'balanced' on YES/NO and entirely long the market."""
-    assert sim.direction_of(contract_type, outcome) == expected
+def test_a_yes_is_charged_the_premium_and_a_no_is_not():
+    assert TODAYS_BAR.value(0.40, YES) == pytest.approx(0.38)
+    assert TODAYS_BAR.value(0.60, NO) == pytest.approx(0.60)
 
 
-def test_the_four_quadrants_are_named_as_MODELS_5_2b_names_them():
-    assert sim.quadrant_of("hit_up", YES) == "hit_up_YES"
-    assert sim.quadrant_of("hit_down", NO) == "hit_down_NO"
+def test_above_ninety_cents_the_bar_is_roi_not_three_cents():
+    value = 0.953
+    cost = 0.93 + 0.04 * 0.07
+    assert TODAYS_BAR.clears(value, cost, 0.93)          # EV < 3c, ROI >= 2%
+    assert not TODAYS_BAR.clears(0.923, 0.90 + 0.04 * 0.10, 0.90)   # same edge at 90c
 
 
-# -------------------------------------------------------------- the ladder
+def test_the_limit_honours_both_floors():
+    value = 0.38
+    assert TODAYS_BAR.limit(value, 0.20) == pytest.approx(min(value - 0.03, value / 1.08))
 
 
-def order(**kw):
-    base = {"market_id": "m1", "outcome_index": YES, "max_usd": 1000.0,
-            "limit_price": 0.50, "reason": "test"}
-    return Order(**{**base, **kw})
+def test_any_price_has_no_floor():
+    assert ANY_PRICE.clears(0.10, 0.50, 0.48)
+    assert ANY_PRICE.limit(0.10, 0.48) == pytest.approx(1.10)
 
 
-def test_the_walk_takes_half_of_each_level_and_no_more():
-    levels = book(CYCLE_A, [(0.30, 100.0), (0.31, 100.0)])
-    taken = sim.walk_ladder(levels, order(), 1000.0, Params())
+# ---------------------------------------------------------------- the ladder
+
+
+def ladder(levels):
+    return pd.DataFrame([{"depth_rank": r, "price": p, "size": s}
+                         for r, (p, s) in enumerate(levels)])
+
+
+def fee(price):
+    return 0.04 * min(price, 1.0 - price)
+
+
+def test_the_walk_takes_half_of_each_level_and_stops_at_the_limit():
+    taken = sim.walk_ladder(ladder([(0.30, 100.0), (0.32, 100.0), (0.40, 100.0)]),
+                            limit=0.36, budget_usd=math.inf, fee=fee)
     assert [t["shares"] for t in taken] == [50.0, 50.0]
+    assert [t["depth_rank"] for t in taken] == [0, 1]
 
 
-def test_the_walk_stops_at_the_first_level_that_breaches_the_limit():
-    """MODELS 4.2. 0.40 all-in is 0.416, which is past a 0.41 limit; the 0.30
-    level in front of it still fills, and nothing behind it is considered."""
-    levels = book(CYCLE_A, [(0.30, 100.0), (0.40, 100.0), (0.20, 100.0)])
-    taken = sim.walk_ladder(levels, order(limit_price=0.41), 1000.0, Params())
-    assert [t["depth_rank"] for t in taken] == [0]
-
-
-def test_the_walk_stops_when_the_budget_runs_out_mid_level():
-    levels = book(CYCLE_A, [(0.30, 1000.0)])
-    taken = sim.walk_ladder(levels, order(), 31.20, Params())
+def test_the_walk_stops_when_the_money_runs_out():
+    taken = sim.walk_ladder(ladder([(0.30, 1000.0)]), limit=0.5, budget_usd=31.2, fee=fee)
     assert taken[0]["shares"] == pytest.approx(100.0)
-    assert taken[0]["cost_usd"] == pytest.approx(31.20)
+    assert taken[0]["cost_usd"] == pytest.approx(31.2)
 
 
-def test_a_fill_under_the_venue_minimum_is_not_a_fill():
-    """A $0.40 sweep is an accounting entry, not a trade. The whole walk goes,
-    not just its tail: an exchange rejects the order, it does not shrink it."""
-    levels = book(CYCLE_A, [(0.30, 1.0)])
-    assert sim.walk_ladder(levels, order(), 1000.0, Params()) == []
+def test_a_walk_under_one_dollar_is_no_fill():
+    assert sim.walk_ladder(ladder([(0.30, 4.0)]), limit=0.5, budget_usd=math.inf,
+                           fee=fee) == []
 
 
-def test_the_fee_charged_matches_the_price_paid_on_every_level():
-    levels = book(CYCLE_A, [(0.30, 100.0), (0.94, 100.0)])
-    taken = sim.walk_ladder(levels, order(limit_price=0.99), 10_000.0, Params())
-    assert taken[0]["fee_usd"] == pytest.approx(0.04 * 0.30 * 50)
-    assert taken[1]["fee_usd"] == pytest.approx(0.04 * 0.06 * 50)
+# ------------------------------------------------------------------- offers
 
 
-# ----------------------------------------------------------------- the caps
+def offers_for(prices, fair=0.40, held=frozenset(), bar=TODAYS_BAR, up=True):
+    book = asks(MON, **prices)
+    return sim.make_offers(FakeType({}), bar, pd.DataFrame([priced(fair=fair, up=up)]),
+                           book, set(held))[0]
 
 
-def test_the_per_market_cap_binds_and_is_named():
-    params = Params()
-    grant = sim.budget_for(order(max_usd=10_000.0), sim.Portfolio(params), params,
-                           "hit_up", "NVDA")
-    assert grant.wanted_usd == params.cap_yes_usd
-    assert grant.budget_usd == pytest.approx(params.cap_yes_usd)
+def test_an_offer_carries_what_a_model_needs():
+    [bet] = offers_for({"yes": ((0.20, 100.0),), "no": ((0.85, 100.0),)})
+    assert (bet.market_id, bet.side, bet.type) == ("m1", YES, "fake")
+    assert bet.win_prob == pytest.approx(0.40) and bet.value == pytest.approx(0.38)
+    assert bet.cost == pytest.approx(0.208)
+    assert bet.ev == pytest.approx(0.38 - 0.208)
+    assert bet.max_usd == pytest.approx(50 * 0.208)
+    assert bet.deadline == DEADLINE
 
 
-def test_the_no_cap_is_the_larger_one_because_a_no_costs_more_per_share():
-    params = Params()
-    grant = sim.budget_for(order(outcome_index=NO, max_usd=10_000.0),
-                           sim.Portfolio(params), params, "hit_up", "NVDA")
-    assert grant.wanted_usd == params.cap_no_usd
+@pytest.mark.parametrize("up,side,direction,vol", [
+    (True, YES, "up", "wild"), (False, NO, "up", "calm"),
+    (False, YES, "down", "wild"), (True, NO, "down", "calm"),
+])
+def test_direction_and_vol_of_a_hit_bet(up, side, direction, vol):
+    prices = ({"yes": ((0.10, 100.0),), "no": ((0.95, 100.0),)} if side == YES
+              else {"yes": ((0.95, 100.0),), "no": ((0.30, 100.0),)})
+    [bet] = offers_for(prices, up=up)
+    assert (bet.side, bet.direction, bet.vol) == (side, direction, vol)
 
 
-def test_the_ticker_cap_is_a_share_of_bankroll_and_counts_every_market():
-    params = Params(bankroll=1_000.0, ticker_cap_frac=0.10, cap_yes_usd=500.0)
-    portfolio = sim.Portfolio(params)
-    portfolio.open[("other", YES)] = sim.Position(
-        market_id="other", outcome_index=YES, ticker="NVDA", contract_type="hit_up",
-        barrier=1.0, deadline=pd.NaT, period="weekly", entry_cycle_id=CYCLE_A,
-        entry_at=pd.Timestamp("2026-09-16T13:40:00Z"), entry_fair=0.4, cost_usd=80.0)
-    grant = sim.budget_for(order(max_usd=500.0), portfolio, params, "hit_up", "NVDA")
-    assert grant.budget_usd == pytest.approx(20.0)
-    assert grant.blocker == "ticker_cap"
+def test_offers_below_the_bar_and_already_held_markets_are_left_out():
+    assert offers_for({"yes": ((0.39, 100.0),), "no": ((0.62, 100.0),)}) == []
+    assert offers_for({"yes": ((0.20, 100.0),), "no": ((0.85, 100.0),)}, held={"m1"}) == []
 
 
-def test_the_direction_cap_pools_hit_up_yes_with_hit_down_no():
-    params = Params(bankroll=1_000.0, direction_cap_frac=0.40, cap_yes_usd=500.0,
-                    ticker_cap_frac=1.0)
-    portfolio = sim.Portfolio(params)
-    portfolio.open[("other", NO)] = sim.Position(
-        market_id="other", outcome_index=NO, ticker="AAPL", contract_type="hit_down",
-        barrier=1.0, deadline=pd.NaT, period="weekly", entry_cycle_id=CYCLE_A,
-        entry_at=pd.Timestamp("2026-09-16T13:40:00Z"), entry_fair=0.4, cost_usd=350.0)
-    grant = sim.budget_for(order(max_usd=500.0), portfolio, params, "hit_up", "NVDA")
-    assert grant.budget_usd == pytest.approx(50.0)
-    assert grant.blocker == "direction_cap"
+def test_offers_come_best_return_first():
+    book = pd.concat([asks(MON, "a", yes=((0.30, 100.0),)), asks(MON, "b", yes=((0.20, 100.0),))])
+    rows = pd.DataFrame([priced("a"), priced("b")])
+    offers, _ = sim.make_offers(FakeType({}), TODAYS_BAR, rows, book, set())
+    assert [b.market_id for b in offers] == ["b", "a"]
 
 
-def test_execute_stops_at_the_per_market_cap_however_deep_the_book():
-    params = Params(cap_yes_usd=25.0, min_fill_usd=1.0)
-    st = state(books=book(CYCLE_A, [(0.30, 10_000.0)]), params=params)
-    fills, capacity = sim.execute(st, [order(max_usd=10_000.0)])
-    assert sum(f.cost_usd for f in fills) == pytest.approx(25.0)
-    assert capacity[0]["wanted_usd"] == 25.0
+# ------------------------------------------------------- models and the format
 
 
-def test_a_model_cannot_buy_both_sides_of_one_market():
-    """MODELS 4.2: one market, one direction, per model, per lifetime."""
-    st = state(books=pd.concat([book(CYCLE_A, [(0.30, 1000.0)], outcome_index=YES),
-                                book(CYCLE_A, [(0.60, 1000.0)], outcome_index=NO)]))
-    sim.execute(st, [order()])
-    _, capacity = sim.execute(st, [order(outcome_index=NO, limit_price=0.90)])
-    assert capacity[0]["blocker"] == "already_other_side"
+def test_a_throwaway_model_runs_through_the_harness():
+    result = replay({MON: (asks(MON, yes=((0.20, 100.0), (0.25, 100.0))), [priced()])},
+                    [resolved(result="Yes")])
+    [position] = result.positions
+    assert position.side == YES and position.shares == pytest.approx(100.0)
+    assert position.payout_usd == pytest.approx(100.0)
+    assert position.pnl_usd == pytest.approx(100.0 - position.cost_usd)
+    # promised EV: value 0.38 against what each level actually cost
+    expected = sum(50 * (0.38 - (p + fee(p))) for p in (0.20, 0.25))
+    assert position.ev_usd == pytest.approx(expected)
 
 
-def test_one_market_one_direction_per_lifetime_by_default():
-    """MODELS 4.2. No model in section 5 asks to re-enter, so a repeated order
-    on a market already held is refused however far the fair has moved."""
-    st = state(books=book(CYCLE_A, [(0.30, 1000.0)]), params=Params(cap_yes_usd=20.0))
-    sim.execute(st, [order()])
-    _, capacity = sim.execute(st, [order()])
-    assert capacity[0]["blocker"] == "no_averaging_down"
-
-    moved = state(cycle_id=CYCLE_B, books=book(CYCLE_B, [(0.30, 1000.0)]),
-                  fair=fair_rows(CYCLE_B, [{"fair": 0.60}]),
-                  portfolio=st.portfolio, params=st.params)
-    _, capacity = sim.execute(moved, [order()])
-    assert capacity[0]["blocker"] == "no_averaging_down"
+def test_a_market_is_bought_once_on_one_side():
+    model = Recorder()
+    cycles = {MON: (asks(MON, yes=((0.20, 100.0),)), [priced()]),
+              TUE: (asks(TUE, yes=((0.20, 100.0),)), [priced()])}
+    result = replay(cycles, model=model)
+    assert len(result.positions) == 1
+    assert len(model.seen) == 1          # nothing left to offer on Tuesday
 
 
-def test_an_explicit_re_entry_still_needs_the_fair_to_have_moved_ten_cents():
-    st = state(books=book(CYCLE_A, [(0.30, 1000.0)]), params=Params(cap_yes_usd=20.0))
-    sim.execute(st, [order()])
-    _, capacity = sim.execute(st, [order(reenter=True)])
-    assert capacity[0]["blocker"] == "no_averaging_down"
-
-    moved = state(cycle_id=CYCLE_B, books=book(CYCLE_B, [(0.30, 1000.0)]),
-                  fair=fair_rows(CYCLE_B, [{"fair": 0.60}]),
-                  portfolio=st.portfolio, params=st.params)
-    _, capacity = sim.execute(moved, [order(reenter=True)])
-    assert capacity[0]["blocker"] != "no_averaging_down"
+def test_the_book_shows_holdings_by_direction_and_vol():
+    model = Recorder()
+    cycles = {MON: (asks(MON, "a", yes=((0.20, 100.0),)), [priced("a")]),
+              TUE: (asks(TUE, "b", yes=((0.20, 100.0),)), [priced("b", up=False)])}
+    replay(cycles, model=model)
+    book = model.seen[1][1]
+    assert book.usd_by_direction()["up"] == pytest.approx(50 * 0.208)
+    assert book.usd_by_vol() == {"calm": 0.0, "wild": pytest.approx(50 * 0.208)}
+    assert book.cash == math.inf
 
 
-def test_a_re_entry_resets_the_reference_fair_it_will_be_measured_against():
-    """Otherwise a fair oscillating 10c either side of the first entry
-    re-enters every cycle - averaging down with extra steps. Measured on
-    2026-09-16 as five identical fills in one market."""
-    st = state(books=book(CYCLE_A, [(0.30, 1000.0)]), params=Params(cap_yes_usd=20.0))
-    sim.execute(st, [order()])
-    second = state(cycle_id=CYCLE_B, books=book(CYCLE_B, [(0.30, 1000.0)]),
-                   fair=fair_rows(CYCLE_B, [{"fair": 0.60}]),
-                   portfolio=st.portfolio, params=st.params)
-    sim.execute(second, [order(reenter=True)])
-    assert st.portfolio.open[("m1", YES)].entry_fair_engine == pytest.approx(0.60)
+def test_an_order_is_capped_by_the_offer_and_by_its_own_limit():
+    class Greedy(TakeAll):
+        name = "greedy"
 
-    third = state(cycle_id=CYCLE_C, books=book(CYCLE_C, [(0.30, 1000.0)]),
-                  fair=fair_rows(CYCLE_C, [{"fair": 0.55}]),
-                  portfolio=st.portfolio, params=st.params)
-    _, capacity = sim.execute(third, [order(reenter=True)])
-    assert capacity[0]["blocker"] == "no_averaging_down"
+        def decide(self, offers, book):
+            return [Order(offers[0], usd=1e9, limit=0.22)]
+
+    result = replay({MON: (asks(MON, yes=((0.20, 100.0), (0.25, 100.0))), [priced()])},
+                    model=Greedy())
+    [position] = result.positions
+    assert position.shares == pytest.approx(50.0)        # the 0.25 level is past 0.22
 
 
-# ------------------------------------------------------------- resolution
+def test_edge_taker_takes_every_offer_whole():
+    from models.edge_taker import EdgeTaker
+
+    result = replay({MON: (pd.concat([asks(MON, "a", yes=((0.20, 100.0),)),
+                                      asks(MON, "b", yes=((0.25, 40.0),))]),
+                           [priced("a"), priced("b")])}, model=EdgeTaker())
+    assert sorted((p.market_id, p.shares) for p in result.positions) == [("a", 50.0), ("b", 20.0)]
 
 
-@pytest.mark.parametrize("result,outcome,expected", [
+def test_random_control_pays_at_most_two_cents_over_the_best_ask():
+    from models.random_control import RandomControl
+
+    book = asks(MON, yes=((0.30, 100.0), (0.31, 100.0), (0.40, 100.0)), no=((0.99, 1.0),))
+    result = replay({MON: (book, [priced(fair=0.10)])}, model=RandomControl())
+    [position] = result.positions
+    assert position.side == YES and position.shares == pytest.approx(100.0)
+
+
+def test_a_new_model_and_a_new_type_are_found_without_editing_any_file(tmp_path):
+    models_dir, types_dir = tmp_path / "models", tmp_path / "types"
+    models_dir.mkdir()
+    types_dir.mkdir()
+    (models_dir / "only_no.py").write_text(textwrap.dedent('''
+        from models import TODAYS_BAR, Model, Order
+
+        class OnlyNo(Model):
+            name = "only_no"
+            bar = TODAYS_BAR
+
+            def decide(self, offers, book):
+                return [Order(b, usd=b.max_usd) for b in offers if b.side == "NO"]
+    '''))
+    (types_dir / "_shared.py").write_text("FAIR = 0.40\n")
+    (types_dir / "fixed.py").write_text(textwrap.dedent(f'''
+        import pandas as pd
+        import bet_types
+        from _shared import FAIR
+
+        class Fixed(bet_types.Polymarket):
+            name = "fixed"
+            period = "weekly"
+
+            def cycles(self, dates):
+                return ["{MON}"]
+
+            def books(self, cycle_id):
+                rows = [(0, 0.20), (1, 0.50)]
+                return pd.DataFrame([{{"market_id": "m1", "outcome_index": i, "side": "ask",
+                                      "depth_rank": 0, "price": p, "size": 100.0,
+                                      "fetched_at_utc": pd.Timestamp("2026-09-14T14:00Z")}}
+                                     for i, p in rows])
+
+            def priced(self, cycle_id):
+                return pd.DataFrame([{{"market_id": "m1", "ticker": "X", "fair": FAIR,
+                                      "deadline": pd.Timestamp("2026-09-18T20:00Z"),
+                                      "yes_direction": "up", "yes_vol": "wild",
+                                      "contract_type": "hit_up", "level": 1.0,
+                                      "period": "weekly"}}])
+
+            def resolutions(self, upto):
+                return pd.DataFrame(columns=["market_id", "result", "outcome_prices",
+                                             "settled_at_utc"])
+    '''))
+    found_models = run.discover_models(models_dir)
+    found_types = run.discover_types(types_dir)
+    assert set(found_models) == {"only_no"} and set(found_types) == {"fixed"}
+    [(result, m)] = run.run_matrix([], model_classes=found_models, type_classes=found_types)
+    assert [(p.side, p.market_id) for p in result.positions] == [(NO, "m1")]
+    assert m["bets"] == 1
+
+
+def test_the_real_folders_hold_the_ported_models_and_the_two_hit_types():
+    assert {"edge_taker", "random_control"} <= set(run.discover_models())
+    assert {"poly-hit-weekly-stock", "poly-hit-monthly-stock"} <= set(run.discover_types())
+
+
+# ------------------------------------------------------------------ accounts
+
+
+def two_weeks():
+    """A bet on Monday that settles a winner on Friday, and another market on
+    offer the Monday after."""
+    cycles = {MON: (asks(MON, "a", yes=((0.20, 1000.0),)), [priced("a")]),
+              NEXT_MON: (asks(NEXT_MON, "b", yes=((0.20, 1000.0),)), [priced("b")])}
+    return cycles, [resolved("a", "Yes", "2026-09-18T20:00:00Z")]
+
+
+def test_max_takes_as_much_as_the_book_allows():
+    cycles, res = two_weeks()
+    result = replay(cycles, res, account=sim.MaxAccount())
+    assert [p.shares for p in result.positions] == [500.0, 500.0]
+    assert results.summary(result)["money_in"] == pytest.approx(2 * 500 * 0.208)
+
+
+def test_compound_starts_small_and_reinvests_what_comes_back():
+    cycles, res = two_weeks()
+    cycles[NEXT_MON] = (asks(NEXT_MON, "b", yes=((0.20, 10_000.0),)), [priced("b")])
+    account = sim.CompoundAccount(start=100.0)
+    result = replay(cycles, res, account=account)
+    first, second = sorted(result.positions, key=lambda p: p.entry_at)
+    assert first.cost_usd == pytest.approx(100.0)
+    shares = 100.0 / 0.208
+    assert second.cost_usd == pytest.approx(shares)       # the payout, all of it
+    assert account.balance == pytest.approx(0.0, abs=1e-6)
+
+
+def test_budget_resets_each_week_and_does_not_roll_over():
+    cycles, res = two_weeks()
+    cycles[TUE] = (asks(TUE, "c", yes=((0.20, 1000.0),)), [priced("c")])
+    result = replay(cycles, res, account=sim.BudgetAccount(per_period=30.0))
+    cost = {p.market_id: p.cost_usd for p in result.positions}
+    assert cost["a"] == pytest.approx(30.0)
+    assert "c" not in cost                    # Tuesday: the week's budget is spent
+    assert cost["b"] == pytest.approx(30.0)   # a new week, not 30 + the payout
+
+
+def test_a_monthly_budget_resets_on_the_first_in_new_york():
+    assert sim.period_key(pd.Timestamp("2026-10-01T03:00:00Z"), "monthly") == "2026-09"
+    assert sim.period_key(pd.Timestamp("2026-10-01T05:00:00Z"), "monthly") == "2026-10"
+    assert sim.period_key(pd.Timestamp("2026-09-20T12:00:00Z"), "weekly") == "2026-09-14"
+    assert sim.period_key(pd.Timestamp("2026-09-20T12:00:00Z"), "daily") == "2026-09-20"
+
+
+def test_the_budget_account_needs_its_amount():
+    with pytest.raises(ValueError):
+        sim.make_account("budget")
+    assert sim.make_account("compound", start=50.0).cash() == 50.0
+
+
+# ---------------------------------------------------------------- settlement
+
+
+@pytest.mark.parametrize("result,side,expected", [
     ("Yes", YES, 1.0), ("Yes", NO, 0.0), ("No", YES, 0.0), ("No", NO, 1.0),
 ])
-def test_a_settled_market_pays_one_or_nothing(result, outcome, expected):
-    assert sim._payout_per_share(result, None, outcome) == expected
+def test_payout_is_par_or_nothing(result, side, expected):
+    assert sim.payout_per_share(result, None, side) == expected
 
 
-def test_a_fifty_fifty_settlement_pays_half_to_both_sides():
-    assert sim._payout_per_share(None, '["0.5", "0.5"]', YES) == 0.5
-    assert sim._payout_per_share(None, ["0.5", "0.5"], NO) == 0.5
+def test_a_fifty_fifty_pays_half_and_a_dispute_pays_nothing_yet():
+    assert sim.payout_per_share(None, '["0.5", "0.5"]', YES) == 0.5
+    assert sim.payout_per_share(None, '["0.9", "0.1"]', YES) is None
 
 
-def test_a_pending_uma_dispute_is_not_a_loss():
-    """MODELS section 6: a null result with prices that are not 0.5/0.5 is a
-    market still being argued over. Booking it as zero would invent a loss."""
-    assert sim._payout_per_share(None, '["1", "0"]', YES) is None
-    assert sim._payout_per_share(None, None, YES) is None
+def test_a_resolution_after_a_cycle_is_not_seen_by_it():
+    model = Recorder()
+    cycles = {MON: (asks(MON, "a", yes=((0.20, 100.0),)), [priced("a")]),
+              TUE: (asks(TUE, "b", yes=((0.20, 100.0),)), [priced("b")])}
+    replay(cycles, [resolved("a", "Yes", "2026-09-15T15:00:00Z")], model=model)
+    assert model.seen[1][1].settled == []      # Tuesday 14:00Z is before 15:00Z
 
 
-def test_yes_cash_comes_back_at_the_touch_and_no_cash_at_the_deadline():
-    """MODELS 4.3 and 4.4: a NO is money locked to the end of the period
-    however early the venue marks the market."""
-    settled = pd.Timestamp("2026-09-16T18:00:00Z")
-    deadline = pd.Timestamp("2026-09-18T20:00:00Z")
-    assert sim.cash_back_time(YES, settled, deadline) == settled
-    assert sim.cash_back_time(NO, settled, deadline) == deadline
+# ------------------------------------------------------------------ reports
 
 
-def settled_portfolio(result="Yes", outcome_index=YES, shares=100.0, cost=30.0):
-    params = Params()
-    portfolio = sim.Portfolio(params)
-    position = sim.Position(
-        market_id="m1", outcome_index=outcome_index, ticker="NVDA",
-        contract_type="hit_up", barrier=200.0,
-        deadline=pd.Timestamp("2026-09-18T20:00:00Z"), period="weekly",
-        entry_cycle_id=CYCLE_A, entry_at=pd.Timestamp("2026-09-16T14:00:00Z"),
-        entry_fair=0.4, shares=shares, cost_usd=cost, fee_usd=1.2)
-    portfolio.open[position.key] = position
-    portfolio.cash -= cost
-    resolutions = pd.DataFrame([{"market_id": "m1", "result": result,
-                                 "settled_at_utc": pd.Timestamp("2026-09-17T18:00:00Z"),
-                                 "outcome_prices": None}])
-    return portfolio, resolutions
+def test_the_summary_sets_promised_ev_against_realised_pnl():
+    cycles, res = two_weeks()
+    result = replay(cycles, res)
+    m = results.summary(result)
+    assert m["bets"] == 2 and m["settled"] == 1 and m["open"] == 1
+    assert m["pnl"] == pytest.approx(500.0 - 500 * 0.208)
+    assert m["settled_promised_ev"] == pytest.approx(500 * (0.38 - 0.208))
+    assert m["realised_over_promised"] == pytest.approx(m["pnl"] / m["settled_promised_ev"])
+    assert m["periods_settled"] == 1
 
 
-def test_a_winning_yes_pays_par_and_the_cash_returns():
-    portfolio, resolutions = settled_portfolio()
-    done = sim.settle(portfolio, resolutions, pd.Timestamp("2026-09-18T20:00:00Z"))
-    assert len(done) == 1
-    assert done[0].payout_usd == pytest.approx(100.0)
-    assert done[0].pnl_usd == pytest.approx(70.0)
-    assert portfolio.cash == pytest.approx(10_000.0 - 30.0 + 100.0)
-    assert portfolio.open == {}
+def test_pnl_is_grouped_by_the_week_of_entry():
+    cycles, res = two_weeks()
+    table = results.by_period(replay(cycles, res))
+    assert list(table.index) == ["2026-09-14", "2026-09-21"]
+    assert table.loc["2026-09-21", "settled"] == 0
 
 
-def test_capital_days_run_to_the_deadline_for_a_no():
-    portfolio, resolutions = settled_portfolio(result="No", outcome_index=NO)
-    done = sim.settle(portfolio, resolutions, pd.Timestamp("2026-09-19T20:00:00Z"))
-    # 2026-09-16T14:00Z to the 2026-09-18T20:00Z deadline is 2.25 days.
-    assert done[0].capital_days == pytest.approx(30.0 * 2.25)
+def test_the_ledger_round_trips_through_its_schema(tmp_path, monkeypatch):
+    import pyarrow.parquet as pq
 
-
-# ----------------------------------------------------------- no lookahead
-
-
-class Peeker:
-    """A model that tries to read the next cycle's book. MODELS 4.1."""
-
-    name = "peeker"
-
-    def __init__(self, target):
-        self.target = target
-
-    def propose(self, state):
-        state.books_at(self.target)
-        return []
-
-
-def test_a_model_that_reads_a_later_cycle_raises():
-    st = state(cycle_id=CYCLE_A, loader=object())
-    with pytest.raises(LookaheadError):
-        Peeker(CYCLE_B).propose(st)
-
-
-def test_a_model_that_reads_its_own_cycle_raises_too():
-    """Its own cycle is already in `state.books`; going back through the loader
-    for it would be a way to get at a frame the harness has not filtered."""
-    st = state(cycle_id=CYCLE_B, loader=object())
-    with pytest.raises(LookaheadError):
-        Peeker(CYCLE_B).propose(st)
-
-
-def test_an_earlier_cycle_is_allowed():
-    class Loader:
-        def books(self, cycle_id):
-            return book(cycle_id, [(0.30, 1.0)])
-
-    st = state(cycle_id=CYCLE_B, loader=Loader())
-    assert len(st.books_at(CYCLE_A)) == 1
-
-
-def test_resolutions_handed_to_a_model_are_only_the_settled_ones():
-    """The filter lives in `data.resolutions_upto`; this pins that the state
-    carries what it was given and does not reach for more."""
-    st = state(resolutions=pd.DataFrame([{"market_id": "m1", "result": "Yes"}]))
-    assert list(st.resolutions["market_id"]) == ["m1"]
-
-
-# --------------------------------------------------------------- the signal
-
-
-def test_yes_and_no_are_priced_off_the_same_fair():
-    """A YES is worth `fair`, a NO `1 - fair`: one number, both sides."""
-    books = pd.concat([book(CYCLE_A, [(0.20, 1000.0)], outcome_index=YES),
-                       book(CYCLE_A, [(0.20, 1000.0)], outcome_index=NO)])
-    fair = fair_rows(CYCLE_A, [{"fair": 0.40}])
-    out = sim.candidate_edges(state(books=books, fair=fair))
-    yes = out[out["outcome_index"] == YES].iloc[0]
-    no = out[out["outcome_index"] == NO].iloc[0]
-    assert yes["win_prob"] == pytest.approx(0.40)
-    assert no["win_prob"] == pytest.approx(0.60)
-    assert set(out["fair_source"]) == {"atm"}
-
-
-def test_deep_otm_markets_are_not_tradeable_on_the_option_signal():
-    """MODELS 3.4: FINDINGS 5.2 measured a fair value ranging 0.002-0.147 on
-    one SPY barrier depending on the vol input."""
-    fair = fair_rows(CYCLE_A, [{"deep_otm": True}])
-    assert sim.candidate_edges(state(fair=fair)).empty
-
-
-def test_a_market_already_touched_is_never_a_candidate():
-    fair = fair_rows(CYCLE_A, [{"touch_pending": True}])
-    assert sim.candidate_edges(state(fair=fair)).empty
-
-
-def test_a_ladder_with_no_option_chain_is_skipped():
-    fair = fair_rows(CYCLE_A, [{"no_chain": True}])
-    assert sim.candidate_edges(state(fair=fair)).empty
-
-
-def test_the_bar_above_ninety_cents_is_roi_not_three_cents_of_ev():
-    """MODELS section 2: above 90c the fee is small but the spread is the whole
-    edge, so a 3c EV bar would refuse every NO worth buying."""
-    books = book(CYCLE_A, [(0.93, 1000.0)], outcome_index=NO)
-    fair = fair_rows(CYCLE_A, [{"fair": 0.047}])
-    out = sim.candidate_edges(state(books=books, fair=fair))
-    assert len(out) == 1
-    assert out.iloc[0]["ev"] < 0.03 and out.iloc[0]["roi"] >= 0.02
-
-
-def test_the_same_edge_at_ninety_cents_fails_the_three_cent_bar():
-    """The companion to the test above: it is the price that switches the bar,
-    so the identical edge one cent lower is refused."""
-    books = book(CYCLE_A, [(0.90, 1000.0)], outcome_index=NO)
-    fair = fair_rows(CYCLE_A, [{"fair": 0.077}])
-    out = sim.candidate_edges(state(books=books, fair=fair))
-    assert out.empty
-
-
-def test_a_market_below_the_bar_is_not_a_candidate():
-    books = book(CYCLE_A, [(0.39, 1000.0)])
-    fair = fair_rows(CYCLE_A, [{"fair": 0.40}])
-    assert sim.candidate_edges(state(books=books, fair=fair)).empty
-
-
-def test_the_limit_the_harness_walks_to_honours_both_bars():
-    books = book(CYCLE_A, [(0.20, 1000.0)])
-    fair = fair_rows(CYCLE_A, [{"fair": 0.40}])
-    row = sim.candidate_edges(state(books=books, fair=fair)).iloc[0]
-    value = 0.40 - sim.YES_RISK_PREMIUM          # a YES pays the premium
-    assert row["limit_price"] == pytest.approx(min(value - 0.03, value / 1.08))
-
-
-# ------------------------------------------------------------- the ledger
-
-
-def test_the_exposure_of_a_no_position_has_the_opposite_sign():
-    """MODELS 5.2: NO on `hit_down` is positive delta because YES on
-    `hit_down` is negative."""
-    params = Params()
-    portfolio = sim.Portfolio(params)
-    for outcome in (YES, NO):
-        portfolio.open[(f"m{outcome}", outcome)] = sim.Position(
-            market_id=f"m{outcome}", outcome_index=outcome, ticker="NVDA",
-            contract_type="hit_down", barrier=180.0, deadline=pd.NaT, period="w",
-            entry_cycle_id=CYCLE_A, entry_at=pd.Timestamp("2026-09-16T14:00:00Z"),
-            entry_fair=0.4, shares=10.0, cost_usd=3.0)
-    positions = list(portfolio.open.values())
-    exposures = [sim.beta_dollar_delta(p, -0.01, 200.0, 2.0) for p in positions]
-    assert exposures[0] == pytest.approx(-0.01 * 200 * 10 * 2.0)
-    assert exposures[1] == pytest.approx(+0.01 * 200 * 10 * 2.0)
-    assert sum(exposures) == pytest.approx(0.0)
-
-
-# ------------------------------------------------------- the whole replay
-
-
-class FakeLoader:
-    """Two cycles, in memory. The level in the first cycle shrinks in the
-    second."""
-
-    def __init__(self, books_by_cycle, fair_by_cycle):
-        self._books = books_by_cycle
-        self._fair = fair_by_cycle
-
-    def cycles(self):
-        return sorted(self._books)
-
-    def books(self, cycle_id):
-        return self._books[cycle_id]
-
-    def fair(self, cycle_id):
-        return self._fair[cycle_id]
-
-
-class BuyOnce:
-    name = "buy_once"
-
-    def __init__(self):
-        self.seen = []
-
-    def propose(self, state):
-        self.seen.append(state.cycle_id)
-        if state.cycle_id != CYCLE_A:
-            return []
-        return [order(max_usd=100.0, limit_price=0.90)]
-
-
-@pytest.fixture
-def replay(monkeypatch, tmp_path):
-    """A two-cycle world with nothing on disk behind it."""
-    books = {
-        CYCLE_A: book(CYCLE_A, [(0.30, 100.0), (0.40, 100.0)]),
-        CYCLE_B: book(CYCLE_B, [(0.30, 20.0), (0.40, 100.0)]),
-    }
-    fair = {CYCLE_A: fair_rows(CYCLE_A, [{}]), CYCLE_B: fair_rows(CYCLE_B, [{}])}
-    resolutions = pd.DataFrame([{
-        "market_id": "m1", "result": "Yes",
-        "settled_at_utc": pd.Timestamp("2026-09-18T18:00:00Z"),
-        "outcome_prices": None, "ticker": "NVDA", "contract_type": "hit_up",
-        "barrier": 200.0}])
-
-    def resolutions_upto(when):
-        return resolutions[resolutions["settled_at_utc"] <= pd.Timestamp(when)]
-
-    monkeypatch.setattr(sim.data, "resolutions_upto", resolutions_upto)
-    monkeypatch.setattr(sim.factors, "beta_table", lambda tickers, now: {"NVDA": 1.9})
-    monkeypatch.setattr(sim.factors, "spy_intraday_return", lambda now: -0.002)
-    monkeypatch.setattr(sim, "_latest_settlement", lambda: "2026-09-19T00:00:00Z")
     monkeypatch.setattr(results.ledger_schema, "STORE", tmp_path / "store")
     monkeypatch.setattr(results, "REPORTS", tmp_path / "reports")
-    return FakeLoader(books, fair)
-
-
-def test_the_replay_hands_each_cycle_once_in_order(replay):
-    model = BuyOnce()
-    sim.run(model, loader=replay)
-    assert model.seen == [CYCLE_A, CYCLE_B]
-
-
-def test_a_level_that_shrank_by_the_next_cycle_still_counts_as_filled(replay):
-    """The first cycle showed 100 at 0.30 and we took 50; the second cycle
-    shows 20. A fill counts if the book had the size when we looked
-    (CLAUDE.md, Decided), so the fill stands."""
-    result = sim.run(BuyOnce(), loader=replay)
-    at_thirty = [f for f in result.fills if f.price == pytest.approx(0.30)]
-    assert len(at_thirty) == 1
-    assert at_thirty[0].shares == pytest.approx(50.0)
-
-
-def test_the_run_settles_what_has_resolved_since_the_last_cycle(replay):
-    """The window is two cycles on the 16th; the market settles on the 18th.
-    Reading that outcome is not lookahead - the decisions were all made
-    before it - and without it MODELS 4.3's resolved-only headline is empty."""
-    result = sim.run(BuyOnce(), loader=replay)
-    assert len(result.settlements) == 1
-    assert result.open_positions == []
-    assert result.settlements[0].payout_per_share == 1.0
-
-
-def test_the_report_and_the_ledger_are_written_where_they_are_asked_for(replay, tmp_path):
-    result = sim.run(BuyOnce(), loader=replay)
-    paths = results.write_run(result)
-    assert paths["report"].exists()
-    assert paths["report"].parent == tmp_path / "reports"
-    assert (tmp_path / "store" / "ledger" / "buy_once" / "fills").exists()
+    cycles, res = two_weeks()
+    result = replay(cycles, res)
+    paths = results.write_run(result, tag="t")
+    assert paths["fills"].parent.parent.name == "take_all__fake_t"
+    assert pq.read_table(paths["fills"]).schema == results.ledger_schema.FILLS
+    assert pq.read_table(paths["bets"]).num_rows == 2
     text = paths["report"].read_text()
-    assert "Resolved PnL" in text and "MODELS 4.3" in text
+    assert "Promised against realised" in text
+    again = results.write_run(result, tag="t")
+    assert pq.read_table(again["bets"]).num_rows == 2      # replaced, not appended
 
 
-def test_the_ledger_round_trips_through_its_own_schema(replay):
-    import pyarrow.parquet as pq
+def test_a_custom_bar_is_used_for_the_offers():
+    class Strict(TakeAll):
+        name = "strict"
+        bar = Bar(min_ev=0.30)
 
-    result = sim.run(BuyOnce(), loader=replay)
-    paths = results.write_run(result)
-    table = pq.read_table(paths["fills"])
-    assert table.schema == sim.ledger_schema.FILLS
-    assert table.num_rows == len(result.fills)
-
-
-def test_a_rerun_replaces_the_ledger_rather_than_appending_to_it(replay):
-    import pyarrow.parquet as pq
-
-    first = results.write_run(sim.run(BuyOnce(), loader=replay))
-    rows = pq.read_table(first["fills"]).num_rows
-    second = results.write_run(sim.run(BuyOnce(), loader=replay))
-    assert pq.read_table(second["fills"]).num_rows == rows
-
-
-def test_cash_falls_by_what_was_spent_and_returns_at_settlement(replay):
-    result = sim.run(BuyOnce(), loader=replay)
-    spent = sum(f.cost_usd for f in result.fills)
-    payout = sum(s.payout_usd for s in result.settlements)
-    assert result.portfolio.cash == pytest.approx(10_000.0 - spent + payout)
-
-
-def test_the_equity_series_has_one_row_per_cycle(replay):
-    result = sim.run(BuyOnce(), loader=replay)
-    assert len(result.equity) == len(result.cycles)
-    assert list(result.equity["cycle_id"]) == [CYCLE_A, CYCLE_B]
-
-
-def test_a_peeking_model_fails_the_run_rather_than_quietly_cheating(replay):
-    with pytest.raises(LookaheadError):
-        sim.run(Peeker(CYCLE_C), loader=replay)
-
-
-# ------------------------------------------------- P6: whose fair is recorded
-
-
-def test_a_position_records_the_fair_the_model_actually_traded_on():
-    """MODELS 4.5 scores "mean fair of positions vs hit rate". For a model
-    with its own fair, recording the engine's fair scores a forecaster it
-    never used."""
-    st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
-               fair=fair_rows(CYCLE_A, [{"fair": 0.40}]))
-    sim.execute(st, [order(fair=0.62, fair_source="own")])
-    position = st.portfolio.open[("m1", YES)]
-    assert position.entry_fair == pytest.approx(0.62)
-    assert position.fair_source == "own"
-
-
-def test_the_engines_fair_is_kept_separately_for_the_re_entry_rule():
-    """The 10c test of MODELS 4.2 has to be evaluated by the harness at a later
-    cycle, and the harness cannot recompute a model's own signal. So it keys on
-    the engine's fair, which it can, and that number is carried apart from the
-    one the report scores."""
-    st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
-               fair=fair_rows(CYCLE_A, [{"fair": 0.40}]))
-    sim.execute(st, [order(fair=0.62, fair_source="own")])
-    position = st.portfolio.open[("m1", YES)]
-    assert position.entry_fair_engine == pytest.approx(0.40)
-
-    later = state(cycle_id=CYCLE_B, books=book(CYCLE_B, [(0.30, 1000.0)]),
-                  fair=fair_rows(CYCLE_B, [{"fair": 0.55}]),
-                  portfolio=st.portfolio, params=st.params)
-    _, capacity = sim.execute(later, [order(fair=0.62, reenter=True)])
-    assert capacity[0]["blocker"] != "no_averaging_down"
-    assert st.portfolio.open[("m1", YES)].entry_fair_engine == pytest.approx(0.55)
-
-
-def test_a_position_taken_on_the_conservative_fair_is_marked_the_same_way():
-    st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
-               fair=fair_rows(CYCLE_A, [{"fair": 0.40}]))
-    sim.execute(st, [order(fair=0.40, fair_source="atm")])
-    marks = sim._marks(st, "run", "m", {"NVDA": 1.0})
-    assert marks[0]["fair"] == pytest.approx(0.40)
-
-
-def test_a_model_with_no_forecast_is_still_marked_on_the_engines_fair():
-    """The random control has no signal, so it has nothing to be scored on -
-    but its open book still has to be worth something, or its equity curve
-    collapses to cash."""
-    st = state(books=book(CYCLE_A, [(0.30, 1000.0)]),
-               fair=fair_rows(CYCLE_A, [{"fair": 0.40}]))
-    sim.execute(st, [order(fair=float("nan"), fair_source="none")])
-    marks = sim._marks(st, "run", "m", {"NVDA": 1.0})
-    assert marks[0]["fair"] == pytest.approx(0.40)
-    assert np.isnan(st.portfolio.open[("m1", YES)].entry_fair)
-
-
-def test_an_unpriced_market_is_not_a_candidate():
-    fair = fair_rows(CYCLE_A, [{"fair": float("nan")}])
-    assert sim.candidate_edges(state(books=book(CYCLE_A, [(0.20, 1000.0)]),
-                                     fair=fair)).empty
-
-
-def test_an_earnings_gap_is_not_a_candidate():
-    """An earnings report between the deadline and the expiry inflates the vol
-    the barrier never sees."""
-    fair = fair_rows(CYCLE_A, [{"earnings_gap": True}])
-    assert sim.candidate_edges(state(books=book(CYCLE_A, [(0.20, 1000.0)]),
-                                     fair=fair)).empty
-
-
-def test_the_concentration_percentages_state_the_dollars_they_are_a_share_of():
-    """A rate with no count. "Largest single position 25% of dollars" against a
-    total the report never prints is not a number anyone can check."""
-    st = state(books=book(CYCLE_A, [(0.30, 1000.0)]))
-    sim.execute(st, [order()])
-    result = sim.Result(model="m", params=st.params, run_id="r",
-                        cycles=[CYCLE_A], fills=[], capacity=pd.DataFrame(),
-                        marks=pd.DataFrame(), equity=pd.DataFrame(), settlements=[],
-                        open_positions=list(st.portfolio.open.values()),
-                        portfolio=st.portfolio, seconds=1.0,
-                        settled_through="2026-09-18T00:00:00Z")
-    text = results.report_markdown(result)
-    deployed = sum(p.cost_usd for p in result.open_positions)
-    assert f"${deployed:,.2f} deployed" in text
+    result = replay({MON: (asks(MON, yes=((0.20, 100.0),)), [priced()])}, model=Strict())
+    assert result.positions == []

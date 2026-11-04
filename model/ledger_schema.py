@@ -4,15 +4,14 @@ Named `ledger_schema`, not `schemas`, for the reason P2 recorded: `data/src`
 already owns that module name and both directories are flat trees on
 `sys.path`, so two modules called `schemas` cannot coexist in one process.
 
-Three tables, each in its own directory, because DuckDB's `read_parquet` glob
-errors when one file in the tree has a column its neighbours lack - so fills,
-marks and resolutions cannot share a directory even though they share a run.
+Two tables per run (one model x type x account), each in its own directory,
+because DuckDB's `read_parquet` glob errors when one file in the tree has a
+column its neighbours lack:
 
-* `fills`     - every share bought, at what price, with what fee.
-* `marks`     - one row per position per cycle: the model's fair, the
-                liquidation bid, and the beta-dollar-delta it carried.
-* `resolutions` - one row per position that settled: what it paid, when the
-                cash came back, and the capital-days it consumed.
+* `fills` - every level bought, at what price, with what fee, and the EV it
+            promised at entry;
+* `bets`  - one row per bet (market and side): its cost, the EV it promised,
+            and, once it resolved, what it paid.
 """
 from __future__ import annotations
 
@@ -30,34 +29,25 @@ F = pa.float64()
 I = pa.int64()
 B = pa.bool_()
 
-FILLS = pa.schema([pa.field(n, t) for n, t in [
-    ("run_id", S), ("model", S), ("cycle_id", S), ("filled_at_utc", S),
-    ("market_id", S), ("outcome_index", I), ("ticker", S), ("contract_type", S),
-    ("barrier", F), ("deadline_utc", S), ("period", S),
-    ("depth_rank", I), ("price", F), ("shares", F), ("fee_usd", F), ("cost_usd", F),
-    ("limit_price", F), ("fair", F), ("fair_source", S), ("reason", S),
-    ("level_size", F),
+COMMON = [
+    ("run_id", S), ("model", S), ("type", S), ("account", S),
+    ("market_id", S), ("side", S), ("outcome_index", I), ("ticker", S),
+    ("contract_type", S), ("level", F), ("deadline_utc", S), ("period", S),
+]
+
+FILLS = pa.schema([pa.field(n, t) for n, t in COMMON + [
+    ("cycle_id", S), ("filled_at_utc", S), ("depth_rank", I), ("price", F),
+    ("shares", F), ("fee_usd", F), ("cost_usd", F), ("ev_usd", F),
+    ("win_prob", F), ("level_size", F),
 ]])
 
-MARKS = pa.schema([pa.field(n, t) for n, t in [
-    ("run_id", S), ("model", S), ("cycle_id", S), ("marked_at_utc", S),
-    ("market_id", S), ("outcome_index", I), ("ticker", S), ("contract_type", S),
-    ("shares", F), ("cost_usd", F), ("fair", F), ("mark_fair_usd", F),
-    ("bid", F), ("mark_bid_usd", F),
-    ("delta", F), ("spot", F), ("beta", F), ("beta_dollar_delta", F),
+BETS = pa.schema([pa.field(n, t) for n, t in COMMON + [
+    ("direction", S), ("vol", S), ("entry_cycle_id", S), ("entry_at_utc", S),
+    ("win_prob", F), ("shares", F), ("cost_usd", F), ("fee_usd", F), ("ev_usd", F),
+    ("result", S), ("payout_usd", F), ("pnl_usd", F), ("settled_at_utc", S),
 ]])
 
-RESOLUTIONS = pa.schema([pa.field(n, t) for n, t in [
-    ("run_id", S), ("model", S), ("market_id", S), ("outcome_index", I),
-    ("ticker", S), ("contract_type", S), ("barrier", F),
-    ("entry_cycle_id", S), ("entry_at_utc", S), ("settled_at_utc", S),
-    ("cash_back_at_utc", S), ("result", S), ("payout_per_share", F),
-    ("shares", F), ("cost_usd", F), ("fee_usd", F), ("payout_usd", F), ("pnl_usd", F),
-    ("entry_fair", F), ("entry_fair_engine", F), ("fair_source", S),
-    ("capital_days", F),
-]])
-
-TABLES = {"fills": FILLS, "marks": MARKS, "resolutions": RESOLUTIONS}
+TABLES = {"fills": FILLS, "bets": BETS}
 
 
 def _cast(value, arrow_type):
@@ -84,8 +74,8 @@ def write_rows(rows: list[dict], schema: pa.Schema, path: Path) -> Path:
     return path
 
 
-def write_ledger(rows, table: str, model: str, run_id: str) -> Path | None:
-    """One Parquet file per (run, table) under model/store/ledger/<model>/<table>/.
+def write_ledger(rows, table: str, name: str) -> Path | None:
+    """One Parquet file per (run, table) under model/store/ledger/<name>/<table>/.
 
     Not append-only, unlike the fair store: a ledger is the output of one run of
     one model over one window, and two runs of the same window are the same
@@ -94,7 +84,7 @@ def write_ledger(rows, table: str, model: str, run_id: str) -> Path | None:
     """
     schema = TABLES[table]
     rows = list(rows)
-    out_dir = STORE / "ledger" / model / table
+    out_dir = STORE / "ledger" / name / table
     if out_dir.exists():
         shutil.rmtree(out_dir)
     if not rows:

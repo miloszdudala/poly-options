@@ -42,16 +42,6 @@ def test_the_pltr_barrier_prices_where_findings_says_it_should(priced):
     assert 0.20 <= row["fair"] <= 0.45
 
 
-def test_a_down_barrier_has_negative_delta(priced):
-    frame, _ = priced
-    down = frame[(frame["contract_type"] == "hit_down") & frame["delta"].notna()
-                 & ~frame["touch_pending"].astype(bool)]
-    up = frame[(frame["contract_type"] == "hit_up") & frame["delta"].notna()
-               & ~frame["touch_pending"].astype(bool)]
-    assert (down["delta"] <= 1e-9).all()
-    assert (up["delta"] >= -1e-9).all()
-
-
 def test_the_option_chain_is_about_fifteen_minutes_older_than_the_book(priced):
     """README: the delay is real, and `quote_age_s` is where it is admitted."""
     frame, _ = priced
@@ -83,7 +73,6 @@ def test_markets_already_beyond_their_barrier_are_flagged_not_priced(priced):
     if pending.empty:
         pytest.skip("no touch-pending markets in this cycle")
     assert (pending["fair"] == 1.0).all()
-    assert (pending["delta"] == 0.0).all()
 
 
 def test_the_deadline_is_a_session_close_never_the_raw_end_date(priced):

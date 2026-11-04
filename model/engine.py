@@ -187,7 +187,7 @@ def price_cycle(cycle_id: str) -> tuple[pd.DataFrame, dict]:
                                                 market.fetched_at_utc))
         if already:
             flags.set("touch_pending", True)
-            rows.append({**row, "fair": 1.0, "delta": 0.0, **flags.columns()})
+            rows.append({**row, "fair": 1.0, **flags.columns()})
             continue
 
         # --- the vol: ATM, of the first expiry at or after the deadline ---
@@ -220,7 +220,7 @@ def price_cycle(cycle_id: str) -> tuple[pd.DataFrame, dict]:
             # The earnings gap: a report in [deadline, expiry) sits inside the
             # expiry's variance and outside the barrier's window, so the fair
             # is biased high there and the signal does not trade it
-            # (sim.candidate_edges). The MU monthly on 2026-09-16 is the case -
+            # (bet_types.PolymarketHit). The MU monthly on 2026-09-16 is the case -
             # earnings 30 Sep after the bell, deadline 30 Sep close, priced off
             # the 2 Oct expiry.
             flags.set("earnings_gap", expiry_close > market.deadline
@@ -229,7 +229,7 @@ def price_cycle(cycle_id: str) -> tuple[pd.DataFrame, dict]:
         flags.set("no_chain", not np.isfinite(sigma_atm))
         flags.set("deep_otm", fairlib.deep_otm(spot, barrier, sigma_atm, t_years))
 
-        fair = delta = float("nan")
+        fair = float("nan")
         if np.isfinite(sigma_atm):
             direction = "up" if is_up else "down"
             # Continuous monitoring, although the venue watches regular-hours
@@ -238,9 +238,8 @@ def price_cycle(cycle_id: str) -> tuple[pd.DataFrame, dict]:
             # (p90 5.3c) and did not improve the Brier score (0.0941 with it,
             # 0.0945 without), so it is not applied (CLAUDE.md, Decided).
             fair = float(fairlib.one_touch(spot, barrier, t_years, sigma_atm, rate, direction))
-            delta = fairlib.one_touch_delta(spot, barrier, t_years, sigma_atm, rate, direction)
 
-        rows.append({**row, "fair": fair, "delta": delta, "sigma_atm": sigma_atm,
+        rows.append({**row, "fair": fair, "sigma_atm": sigma_atm,
                      "expiry": str(expiry.date()) if expiry is not None else None,
                      "n_strikes": n_strikes, **flags.columns()})
 

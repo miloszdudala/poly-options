@@ -1,5 +1,5 @@
-"""`run_all.py`: the summary table, the best/worst-day split, and the warning
-that has to sit above a PnL measured on a window shorter than the markets.
+"""`run_all.py`: the summary table and the warning that has to sit above a
+PnL measured on a window shorter than the markets.
 """
 from __future__ import annotations
 
@@ -12,55 +12,29 @@ import sim
 
 
 def row(**kw):
-    base = {"model": "m", "positions_opened": 3, "wanted_usd": 100.0,
-            "filled_usd": 50.0, "positions_resolved": 2,
-            "pnl_usd": 1.0, "open_pnl_at_fair_usd": 0.0,
-            "open_pnl_at_bid_usd": -1.0, "bdd_max_abs_frac": 0.1,
-            "largest_ticker_share": 0.5, "worst_day_usd": -2.0}
+    base = {"model": "m", "type": "t", "bets": 3, "money_in": 50.0, "promised_ev": 4.0,
+            "settled": 2, "settled_promised_ev": 2.0, "pnl": 1.0,
+            "realised_over_promised": 0.5, "periods_settled": 1}
     return {**base, **kw}
 
 
-def test_the_summary_table_has_one_row_per_model_and_a_header():
-    text = run_all.summary_table([row(model="a"), row(model="b")])
+def test_the_summary_table_has_one_row_per_model_and_type_and_a_header():
+    text = results.summary_table([row(model="a"), row(model="b")])
     assert text.count("\n") == 3          # header, rule, two rows
-    assert "| a |" in text and "| b |" in text
+    assert "| a | t |" in text and "| b | t |" in text
+    assert "promised (settled)" in text and "PnL (settled)" in text
 
 
 def test_a_missing_number_prints_as_a_dash_rather_than_nan():
-    text = run_all.summary_table([row(pnl_usd=float("nan"))])
+    text = results.summary_table([row(realised_over_promised=float("nan"))])
     assert "nan" not in text and "| - |" in text
 
 
-def test_the_best_and_worst_spy_days_come_from_the_days_with_a_spy_return():
-    daily = pd.DataFrame({
-        "pnl_marked_usd": [10.0, -50.0, 5.0],
-        "spy_return": [0.01, -0.04, float("nan")],
-    }, index=["2026-09-14", "2026-09-15", "2026-09-16"])
-    out = run_all.best_and_worst_days(daily)
-    assert out["worst_spy_date"] == "2026-09-15"
-    assert out["pnl_on_worst_spy_day"] == -50.0
-    assert out["best_spy_date"] == "2026-09-14"
-    assert out["spy_days"] == 2
-
-
-def test_the_worst_day_is_the_worst_pnl_even_without_a_spy_return():
-    daily = pd.DataFrame({"pnl_marked_usd": [10.0, -99.0],
-                          "spy_return": [float("nan")] * 2},
-                         index=["2026-09-15", "2026-09-16"])
-    out = run_all.best_and_worst_days(daily)
-    assert out["worst_day_usd"] == -99.0
-    assert "worst_spy_date" not in out
-
-
-def test_the_day_count_does_not_overwrite_the_one_metrics_owns():
-    """`metrics['days']` is session days replayed; this index is wider because
-    it includes days on which something only settled. Naming both `days` made
-    a one-day run report itself as two."""
-    daily = pd.DataFrame({"pnl_marked_usd": [1.0, 2.0], "spy_return": [0.0, 0.0]},
-                         index=["2026-09-16", "2026-09-17"])
-    out = run_all.best_and_worst_days(daily)
-    assert "days" not in out
-    assert out["pnl_days"] == 2
+def test_the_combined_report_names_the_control_and_the_skips():
+    rows = [row(model="edge_taker"), row(model="random_control", skipped={"no expiry": 3})]
+    text = run_all.combined_report(rows, pd.DataFrame(), {"selection_biased": False},
+                                   ["2026-09-16"], 1.0)
+    assert "random_control" in text and "no expiry 3" in text
 
 
 def test_a_window_with_no_settled_non_touch_is_labelled_as_such():
@@ -69,7 +43,7 @@ def test_a_window_with_no_settled_non_touch_is_labelled_as_such():
     what the window shows is that only the touched markets have settled."""
     sample = {"markets": 680, "resolved": 51, "deadline_passed": 0,
               "base_rate": 1.0, "selection_biased": True}
-    text = run_all._headline_warning([row(positions_resolved=17)], sample)
+    text = run_all.headline_warning([row(settled=17)], sample)
     assert "has not landed" in text
     assert "0 have reached their" in text
 
@@ -77,7 +51,7 @@ def test_a_window_with_no_settled_non_touch_is_labelled_as_such():
 def test_an_unbiased_window_gets_a_plain_statement_instead():
     sample = {"markets": 680, "resolved": 400, "deadline_passed": 380,
               "base_rate": 0.31, "selection_biased": False}
-    text = run_all._headline_warning([row()], sample)
+    text = run_all.headline_warning([row()], sample)
     assert "coin" not in text and "0.310" in text
 
 
@@ -95,7 +69,7 @@ def test_universe_scores_reports_the_sample_beside_the_scores(monkeypatch):
     monkeypatch.setattr(sim.data, "resolutions_upto", lambda when: outcomes)
     monkeypatch.setattr(results, "_market_mids", lambda dates: pd.DataFrame(
         [{"market_id": "m1", "cycle_id": "20260916T140000Z-a", "market_mid": 0.9}]))
-    monkeypatch.setattr(sim, "_latest_settlement", lambda: "2026-09-18T00:00:00Z")
+    monkeypatch.setattr(results, "latest_settlement", lambda: "2026-09-18T00:00:00Z")
 
     scores, sample = results.universe_scores(["2026-09-16"])
     assert sample["deadline_passed"] == 0
@@ -115,28 +89,3 @@ def test_a_mixed_resolved_sample_gets_the_share_and_no_sermon():
     note = results._selection_note({"positions_resolved": 40, "resolved_yes_share": 0.35,
                                 "resolved_on_no": 20})
     assert "35%" in note and "selection" not in note
-
-
-def test_every_model_run_all_builds_carries_its_own_params():
-    """MODELS 5.1-5.3 give three different sets of caps; a model that inherited
-    the defaults would be measuring a different strategy than the one named."""
-    models = run_all.build_models()
-    assert [m.name for m in models] == ["edge_taker", "direction_balanced",
-                                        "scenario_hedged"]
-    assert len({(m.params.ticker_cap_frac, m.params.direction_cap_frac)
-                for m in models}) == len(models)
-
-
-def test_model_d_the_maker_is_not_built():
-    """MODELS 5.4 defers it, and the prompt says not to build it. Pinned so a
-    later pass has to delete this test on purpose rather than by accident."""
-    assert all("maker" not in m.name for m in run_all.build_models())
-
-
-def test_a_tagged_threshold_sweep_gets_its_own_names():
-    """So a month-end re-run at a 10c bar does not overwrite the 3c run."""
-    models = run_all.build_models(min_ev=0.10, min_roi=0.20, tag="ev10")
-    assert [m.name for m in models] == ["edge_taker_ev10", "direction_balanced_ev10",
-                                        "scenario_hedged_ev10"]
-    assert models[0].min_ev == 0.10 and models[1].min_roi == 0.20
-    assert run_all.build_models()[0].name == "edge_taker"

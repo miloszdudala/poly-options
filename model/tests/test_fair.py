@@ -163,12 +163,6 @@ def test_one_touch_is_monotone_in_sigma_time_and_distance():
     assert p(barrier=125.0) < p(barrier=103.0)
 
 
-def test_delta_is_negative_for_a_down_barrier_and_positive_for_an_up_one():
-    up = fair.one_touch_delta(100.0, 108.0, 5 / 252, 0.45, 0.0, "up")
-    down = fair.one_touch_delta(100.0, 92.0, 5 / 252, 0.45, 0.0, "down")
-    assert up > 0 and down < 0
-
-
 # ------------------------------------------------------------------- flags
 
 

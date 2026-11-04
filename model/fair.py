@@ -239,19 +239,6 @@ def one_touch(spot, barrier, years, sigma, rate=0.0, direction="up"):
     return np.clip(out, 0.0, 1.0)
 
 
-def one_touch_delta(spot: float, barrier: float, years: float, sigma: float,
-                    rate: float, direction: str, bump: float = 0.005) -> float:
-    """`dP/dS` of `one_touch`, by central difference on a 0.5% spot bump.
-
-    The YES-side number: negative for a down barrier. The caller flips it for
-    a NO.
-    """
-    up_spot, down_spot = spot * (1.0 + bump), spot * (1.0 - bump)
-    p_up = float(one_touch(up_spot, barrier, years, sigma, rate, direction))
-    p_down = float(one_touch(down_spot, barrier, years, sigma, rate, direction))
-    return (p_up - p_down) / (up_spot - down_spot)
-
-
 # ------------------------------------------------------------------- flags
 
 

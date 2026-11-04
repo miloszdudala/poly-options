@@ -3,17 +3,13 @@
 The trap this file exists for is that a daily bar for session D is stamped
 `D 04:00Z` - midnight Eastern, *before* the session it summarises. So during
 D's own session `bar_time < now` is true and the bar's close, set at 16:00 ET,
-is visible at a 14:00Z cycle. Everything downstream of a daily bar inherits
-that, here the betas.
+is visible at a 14:00Z cycle.
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
-import pytest
 
 import data
-import factors
 
 MIDSESSION = pd.Timestamp("2026-09-16T14:00:00Z")
 
@@ -73,26 +69,6 @@ def test_todays_bar_becomes_visible_once_todays_session_has_closed(monkeypatch):
     monkeypatch.setattr(data, "daily_bars", lambda symbol: bars)
     after = pd.Timestamp("2026-09-16T21:00:00Z")
     assert list(data.daily_bars_asof("X", after)["close"]) == [101.0, 90.0]
-
-
-def test_a_beta_does_not_know_todays_close(monkeypatch):
-    rng = np.random.default_rng(3)
-    steps = rng.normal(0, 0.01, 300)
-    dates = [d.date().isoformat() for d in pd.bdate_range("2025-01-02", periods=300)]
-    spy = synthetic(dates, 100 * np.exp(np.cumsum(steps)), symbol="SPY")
-    mine = synthetic(dates, 50 * np.exp(np.cumsum(2 * steps)))
-    crashed = mine.copy()
-    crashed.loc[crashed.index[-1], "close"] *= 0.5
-
-    factors._beta_cached.cache_clear()
-    monkeypatch.setattr(data, "daily_bars",
-                        lambda s: spy if s == "SPY" else crashed)
-    during = factors.beta("X", pd.Timestamp(f"{dates[-1]}T14:00:00Z"))
-    factors._beta_cached.cache_clear()
-    monkeypatch.setattr(data, "daily_bars", lambda s: spy if s == "SPY" else mine)
-    clean = factors.beta("X", pd.Timestamp(f"{dates[-1]}T14:00:00Z"))
-    factors._beta_cached.cache_clear()
-    assert during == pytest.approx(clean)
 
 
 # ----------------------------------------------------- duplicated bar times

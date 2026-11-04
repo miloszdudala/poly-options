@@ -27,7 +27,6 @@ import data
 import engine
 import ledger_schema
 import results
-import sim
 
 # --------------------------------------------------------------- thresholds
 
@@ -57,14 +56,6 @@ KNOWN_THIN_DATES = {
 }
 
 YES, NO = 0, 1
-CAPS_BY_MODEL = {
-    # (cap_yes, cap_no, ticker_cap_frac, direction_cap_frac) - MODELS 4.4 and 5
-    "edge_taker": (150.0, 500.0, 1.00, 1.00),
-    "direction_balanced": (150.0, 500.0, 0.10, 1.00),
-    "scenario_hedged": (150.0, 500.0, 0.12, 1.00),
-    "random_control": (150.0, 500.0, 0.10, 0.40),
-}
-BANKROLL = 10_000.0
 
 
 # ----------------------------------------------------------------- fixtures
@@ -93,9 +84,11 @@ def _ledger(table: str) -> pd.DataFrame:
     parts = list(root.glob(f"*/{table}/*.parquet"))
     if not parts:
         return pd.DataFrame()
-    frame = pd.concat([pd.read_parquet(p) for p in parts], ignore_index=True)
-    for col in ("filled_at_utc", "marked_at_utc", "entry_at_utc", "settled_at_utc",
-                "cash_back_at_utc", "deadline_utc"):
+    # `model` becomes the run's own name (model, type, account, tag), so a
+    # group-by per model is a group-by per replay.
+    frame = pd.concat([pd.read_parquet(p).assign(model=p.parent.parent.name) for p in parts],
+                      ignore_index=True)
+    for col in ("filled_at_utc", "entry_at_utc", "settled_at_utc", "deadline_utc"):
         if col in frame:
             frame[col] = pd.to_datetime(frame[col], format="ISO8601", utc=True, errors="coerce")
     return frame
@@ -110,13 +103,9 @@ def fills():
 
 
 @pytest.fixture(scope="module")
-def marks():
-    return _ledger("marks")
-
-
-@pytest.fixture(scope="module")
 def settlements():
-    return _ledger("resolutions")
+    bets = _ledger("bets")
+    return bets[bets["result"].notna()] if len(bets) else bets
 
 
 @pytest.fixture(scope="module")
@@ -195,7 +184,7 @@ def test_option_quotes_are_the_expected_age_in_every_cycle(fair, fills):
     reversed_ = by_cycle[by_cycle < 0]
     per_date = reversed_.groupby(reversed_.index.map(data.cycle_date)).size()
     assert (per_date <= 1).all(), f"more than one chain-after-book cycle on a date: {per_date.to_dict()}"
-    option = fills[fills["model"].str.startswith(("edge_taker", "direction_balanced", "scenario_hedged"))]
+    option = fills[fills["model"].str.startswith("edge_taker")]
     ages = fair.set_index(["cycle_id", "market_id"])["quote_age_s"]
     per_fill = [ages.get((c, m), np.nan) for c, m in zip(option["cycle_id"], option["market_id"])]
     contaminated = option[np.asarray(per_fill, dtype=float) < 0]
@@ -377,7 +366,7 @@ def test_an_earnings_gap_is_never_traded_on_the_option_signal(fair, fills):
     if gap.empty:
         pytest.skip("no earnings-gap market-cycles yet")
     keyed = set(zip(gap["cycle_id"], gap["market_id"]))
-    option_models = fills[fills["model"].isin(["edge_taker", "direction_balanced", "scenario_hedged"])]
+    option_models = fills[fills["model"].str.startswith("edge_taker")]
     traded = option_models[[(c, m) in keyed for c, m in
                             zip(option_models["cycle_id"], option_models["market_id"])]]
     assert traded.empty, f"{len(traded)} option-signal fills on an earnings gap"
@@ -427,9 +416,11 @@ def test_no_fill_on_a_market_whose_barrier_had_already_printed(fills):
         start = data.watch_start_for(f.market_id, f.deadline_utc, f.period)
         if pd.isna(start):
             continue
-        if data.touched_between(f.ticker, float(f.barrier), f.contract_type == "hit_up",
+        if f.contract_type not in ("hit_up", "hit_down"):
+            continue
+        if data.touched_between(f.ticker, float(f.level), f.contract_type == "hit_up",
                                 start, f.filled_at_utc) is True:
-            late.append((f.model, f.ticker, f.contract_type, float(f.barrier), str(f.filled_at_utc)))
+            late.append((f.model, f.ticker, f.contract_type, float(f.level), str(f.filled_at_utc)))
     assert not late, f"{len(late)} fills after the barrier had printed: {late[:5]}"
 
 
@@ -441,31 +432,6 @@ def test_one_position_per_market_per_direction_per_model(fills):
     assert (cycles <= 1).all(), f"re-entered without the flag: {cycles[cycles > 1].index.tolist()[:5]}"
 
 
-def test_every_position_respects_its_model_s_caps_at_every_cycle(marks):
-    """From the per-cycle marks: cost per market, per ticker and per direction
-    against MODELS 4.4 / section 5 caps, for every model, every cycle."""
-    if marks.empty:
-        pytest.skip("no marks yet")
-    bad = []
-    for model, group in marks.groupby("model"):
-        cap_yes, cap_no, ticker_frac, direction_frac = CAPS_BY_MODEL.get(
-            model.split("_ev")[0], CAPS_BY_MODEL["random_control"])
-        per_market = group.groupby(["cycle_id", "market_id", "outcome_index"])["cost_usd"].sum()
-        for (cycle, market, outcome), cost in per_market.items():
-            cap = cap_yes if outcome == YES else cap_no
-            if cost > cap + 1e-6:
-                bad.append((model, "market", market, cycle, round(cost, 2)))
-        per_ticker = group.groupby(["cycle_id", "ticker"])["cost_usd"].sum()
-        over = per_ticker[per_ticker > ticker_frac * BANKROLL + 1e-6]
-        bad += [(model, "ticker", t, c, round(v, 2)) for (c, t), v in over.items()]
-        group = group.assign(direction=[sim.direction_of(ct, int(o)) for ct, o in
-                                        zip(group["contract_type"], group["outcome_index"])])
-        per_direction = group.groupby(["cycle_id", "direction"])["cost_usd"].sum()
-        over = per_direction[per_direction > direction_frac * BANKROLL + 1e-6]
-        bad += [(model, "direction", d, c, round(v, 2)) for (c, d), v in over.items()]
-    assert not bad, f"{len(bad)} cap breaches: {bad[:5]}"
-
-
 def test_settlements_agree_with_the_venue_and_with_arithmetic(settlements, venue):
     if settlements.empty:
         pytest.skip("nothing settled yet")
@@ -473,11 +439,9 @@ def test_settlements_agree_with_the_venue_and_with_arithmetic(settlements, venue
         row = venue.loc[s.market_id]
         assert str(row["result"]) == str(s.result), (s.model, s.market_id)
         won = (s.result == "Yes") if s.outcome_index == YES else (s.result == "No")
-        assert s.payout_per_share == (1.0 if won else 0.0), (s.model, s.market_id)
+        assert abs(s.payout_usd - (s.shares if won else 0.0)) < 1e-6, (s.model, s.market_id)
         assert abs(s.pnl_usd - (s.payout_usd - s.cost_usd)) < 1e-6
         assert s.settled_at_utc >= s.entry_at_utc, (s.model, s.market_id)
-        if s.outcome_index == NO:
-            assert s.cash_back_at_utc >= s.settled_at_utc
 
 
 # ========================================================= 4. model behaviour
@@ -491,10 +455,11 @@ def _fair_row(keyed, cycle_id, market_id):
 
 
 def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
-    """A, B and B-simple: the recorded fair is the engine's, the market was neither deep OTM nor chainless, and the price paid
-    cleared MODELS 5.1's EV and ROI bars against that fair."""
+    """edge_taker: the recorded win probability is the engine's fair for the
+    side bought, the market was neither deep OTM nor chainless, and the price
+    paid cleared today's EV and ROI floors against it."""
     keyed = _fair_at(fair)
-    option = fills[fills["model"].str.startswith(("edge_taker", "direction_balanced", "scenario_hedged"))]
+    option = fills[fills["model"].str.startswith("edge_taker")]
     if option.empty:
         pytest.skip("no option-signal fills yet")
     bad = []
@@ -502,31 +467,18 @@ def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
         row = _fair_row(keyed, f.cycle_id, f.market_id)
         if row is None:
             bad.append((f.model, f.market_id, "no fair row")); continue
-        expect = float(row["fair"])
-        if not np.isfinite(expect) or abs(expect - f.fair) > 1e-9:
-            bad.append((f.model, f.market_id, f"fair {f.fair} != {expect}")); continue
+        fair_yes = float(row["fair"])
+        win = fair_yes if f.outcome_index == YES else 1.0 - fair_yes
+        if not np.isfinite(win) or abs(win - f.win_prob) > 1e-9:
+            bad.append((f.model, f.market_id, f"win_prob {f.win_prob} != {win}")); continue
         if bool(row["deep_otm"]) or bool(row["no_chain"]):
             bad.append((f.model, f.market_id, "deep_otm or no_chain")); continue
-        win = expect if f.outcome_index == YES else 1.0 - expect
         cost = f.price + 0.04 * min(f.price, 1 - f.price)
         dear = f.price > 0.90
         ev_bar, roi_bar = (0.0, 0.02) if dear else (0.03, 0.08)
-        if str(f.reason).endswith("_hedge"):
-            # A hedge leg of direction_balanced / scenario_hedged: let in at
-            # EV >= 0 while the book is past its limit (MODELS 5.2c/d).
-            ev_bar, roi_bar = 0.0, 0.0
-        if "_ev" in f.model:
-            continue        # a tagged sweep runs at its own bar
         if win - cost < ev_bar - 1e-9 or (win - cost) / cost < roi_bar - 1e-9:
             bad.append((f.model, f.market_id, f"win {win:.3f} cost {cost:.3f}"))
     assert not bad, f"{len(bad)} option-signal fills that did not clear the bar: {bad[:5]}"
-
-
-def test_the_random_control_carries_no_forecast(fills):
-    control = fills[fills["model"].str.startswith("random_control")]
-    if control.empty:
-        pytest.skip("no control fills yet")
-    assert control["fair"].isna().all(), "the control recorded a fair value"
 
 
 def test_the_daily_report_exists_for_the_newest_priced_date_and_warns(dates):

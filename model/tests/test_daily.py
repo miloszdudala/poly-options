@@ -13,7 +13,7 @@ import pytest
 import daily
 import results
 import sim
-from sim import YES, Params
+from models import YES
 
 REPO = Path(__file__).resolve().parent.parent.parent
 SCHEDULING = REPO / "scheduling"
@@ -110,63 +110,35 @@ def test_an_empty_pricing_result_is_not_written(monkeypatch):
     assert written == []
 
 
-# ------------------------------------------------------- 2. today's slices
+# ------------------------------------------------------- 2. today's slice
 
 
-def result_with(capacity=None, equity=None, fills=None, settlements=None,
-                cycles=("20260916T140000Z-a",)):
-    return sim.Result(
-        model="m", params=Params(), run_id="r", cycles=list(cycles),
-        fills=fills or [], capacity=capacity if capacity is not None else pd.DataFrame(),
-        marks=pd.DataFrame(), equity=equity if equity is not None else pd.DataFrame(),
-        settlements=settlements or [], open_positions=[], portfolio=sim.Portfolio(Params()),
-        seconds=1.0, settled_through="2026-09-18T00:00:00Z")
+def position(cycle_id="20260916T140000Z-a", win_prob=0.4, won=None, cost=100.0, ev=5.0):
+    p = sim.Position(
+        market_id=f"m{cycle_id}{win_prob}{won}", side=YES, ticker="NVDA", type="t",
+        contract_type="hit_up", level=1.0, deadline=pd.Timestamp("2026-09-18T20:00:00Z"),
+        period="weekly", direction="up", vol="wild", entry_cycle_id=cycle_id,
+        entry_at=pd.Timestamp(sim.data.cycle_start(cycle_id)), win_prob=win_prob,
+        shares=10.0, cost_usd=cost, ev_usd=ev)
+    if won is not None:
+        p.result = "Yes" if won else "No"
+        p.payout_usd = 10.0 if won else 0.0
+        p.settled_at = pd.Timestamp("2026-09-17T18:00:00Z")
+    return p
 
 
-def test_todays_capacity_counts_only_todays_cycles():
-    capacity = pd.DataFrame([
-        {"cycle_id": "20260916T140000Z-a", "wanted_usd": 100.0, "filled_usd": 10.0},
-        {"cycle_id": "20260917T140000Z-b", "wanted_usd": 900.0, "filled_usd": 90.0},
-    ])
-    out = daily.today_capacity(result_with(capacity=capacity), "2026-09-16")
-    assert out == {"orders": 1, "wanted_usd": 100.0, "filled_usd": 10.0}
+def result_with(positions=(), cycles=("20260916T140000Z-a",)):
+    return sim.Result(model="m", type="t", account="max", period="weekly",
+                      cycles=list(cycles), positions=list(positions), seconds=1.0,
+                      settled_through="2026-09-18T00:00:00Z", skipped={})
 
 
-def test_todays_exposure_closes_on_the_last_cycle_and_peaks_on_the_largest():
-    """The close is what MODELS 5.2's band is a statement about; the peak is
-    what says whether the band held during the session."""
-    equity = pd.DataFrame([
-        {"date": "2026-09-16", "beta_dollar_delta": -200.0},
-        {"date": "2026-09-16", "beta_dollar_delta": -991.0},
-        {"date": "2026-09-16", "beta_dollar_delta": -212.0},
-        {"date": "2026-09-17", "beta_dollar_delta": 5_000.0},
-    ])
-    out = daily.today_exposure(result_with(equity=equity), "2026-09-16")
-    assert out["bdd_close"] == -212.0
-    assert out["bdd_peak"] == -991.0
-    assert out["cycles"] == 3
-
-
-def test_a_date_the_model_did_not_trade_reports_nan_not_zero():
-    """Zero would read as "flat and hedged"; there was no book at all."""
-    equity = pd.DataFrame([{"date": "2026-09-17", "beta_dollar_delta": 5_000.0}])
-    out = daily.today_exposure(result_with(equity=equity), "2026-09-16")
-    assert np.isnan(out["bdd_close"]) and out["cycles"] == 0
-
-
-def fill(cycle_id, cost):
-    return sim.Fill(cycle_id=cycle_id, filled_at=pd.Timestamp("2026-09-16T14:00:00Z"),
-                    market_id="m1", outcome_index=YES, depth_rank=0, price=0.3,
-                    shares=1.0, fee_usd=0.0, cost_usd=cost, level_size=10.0,
-                    limit_price=0.5, fair=0.4, fair_source="", reason="t")
-
-
-def test_todays_fills_count_only_today():
-    fills = [fill("20260916T140000Z-a", 10.0),
-             fill("20260916T141500Z-b", 5.0),
-             fill("20260917T140000Z-c", 99.0)]
-    out = daily.today_fills(result_with(fills=fills), "2026-09-16")
-    assert out == {"fills": 2}
+def test_todays_bets_count_only_today():
+    positions = [position("20260916T140000Z-a", cost=10.0),
+                 position("20260916T141500Z-b", cost=5.0),
+                 position("20260917T140000Z-c", cost=99.0)]
+    out = daily.today_bets(result_with(positions), "2026-09-16")
+    assert out == {"bets": 2, "money_in": 15.0, "promised_ev": 10.0}
 
 
 # ------------------------------------------------------ 3. collector gaps
@@ -261,46 +233,19 @@ class _FixedNow:
 # ----------------------------------------------------------- the report
 
 
-def settlement(win_prob, won, cost=100.0):
-    position = sim.Position(
-        market_id=f"m{win_prob}{won}", outcome_index=YES, ticker="NVDA",
-        contract_type="hit_up", barrier=1.0,
-        deadline=pd.Timestamp("2026-09-18T20:00:00Z"), period="weekly",
-        entry_cycle_id="20260916T140000Z-a",
-        entry_at=pd.Timestamp("2026-09-16T14:00:00Z"), entry_fair=win_prob,
-        shares=10.0, cost_usd=cost)
-    payout = 1.0 if won else 0.0
-    return sim.Settlement(
-        position=position, result="Yes" if won else "No",
-        settled_at=pd.Timestamp("2026-09-17T18:00:00Z"),
-        cash_back_at=pd.Timestamp("2026-09-18T20:00:00Z"),
-        payout_per_share=payout, payout_usd=payout * 10.0,
-        pnl_usd=payout * 10.0 - cost, capital_days=cost * 2.25)
-
-
 def busy_run(name):
-    settlements = [settlement(p, w) for p, w in
-                   ((0.07, False), (0.15, False), (0.3, True), (0.45, True),
-                    (0.6, True), (0.7, False), (0.85, True), (0.97, True))]
-    result = result_with(
-        capacity=pd.DataFrame([{"cycle_id": "20260916T140000Z-a", "wanted_usd": 100.0,
-                                "budget_usd": 50.0, "filled_usd": 10.0,
-                                "blocker": "book"}]),
-        equity=pd.DataFrame([{"cycle_id": "20260916T140000Z-a", "date": "2026-09-16",
-                              "beta_dollar_delta": -500.0, "equity_fair_usd": 9_900.0,
-                              "equity_bid_usd": 9_800.0}]),
-        settlements=settlements)
-    m = results.metrics(result)
-    m["model"] = name
-    m["worst_day_usd"] = -12.0
-    return result, m
+    positions = [position(win_prob=p, won=w) for p, w in
+                 ((0.07, False), (0.15, False), (0.3, True), (0.45, True),
+                  (0.6, True), (0.7, False), (0.85, True), (0.97, True))]
+    result = result_with(positions)
+    result.model = name
+    return result, results.summary(result)
 
 
 def test_the_report_stays_under_a_hundred_and_twenty_lines():
     """The prompt's ceiling, and the reason the reliability tables are one
     table with a model column rather than five tables."""
-    runs = [busy_run(n) for n in ("edge_taker", "direction_balanced", "scenario_hedged",
-                                  "random_control")]
+    runs = [busy_run(n) for n in ("edge_taker", "random_control", "a", "b")]
     gaps = pd.DataFrame([{"date": f"2026-09-{d:02d}", "in_session_cycles": 21,
                           "all_runs": 28, "median_gap_min": 17.5,
                           "longest_gap_min": 41.2, "gaps_over_2x": 1,
@@ -340,10 +285,15 @@ def test_an_unbiased_sample_gets_no_warning():
 
 
 def test_a_run_with_nothing_resolved_still_produces_a_reliability_section():
-    text = daily.report("2026-09-16", [(result_with(), {"model": "m", **results.metrics(
-        result_with())})], ["2026-09-16"], [], pd.DataFrame(),
-        {"selection_biased": False}, 1.0)
-    assert "no resolved position yet" in text
+    text = daily.report("2026-09-16", [(result_with(), results.summary(result_with()))],
+                        ["2026-09-16"], [], pd.DataFrame(), {"selection_biased": False}, 1.0)
+    assert "no settled bet yet" in text
+
+
+def test_the_report_sets_promised_ev_against_realised_pnl():
+    text = daily.report("2026-09-16", [busy_run("edge_taker")], ["2026-09-16"], [],
+                        pd.DataFrame(), {"selection_biased": False}, 1.0)
+    assert "promised (settled)" in text and "PnL (settled)" in text
 
 
 # --------------------------------------------------------- launchd wiring
@@ -385,27 +335,3 @@ def test_install_sh_converts_both_job_times_not_just_the_daily_one():
     text = (SCHEDULING / "install.sh").read_text()
     assert "read -r DAILY_HOUR DAILY_MINUTE REPORT_HOUR REPORT_MINUTE" in text
     assert "((17, 30), (18, 0))" in text
-
-
-# ----------------------------------------------------------- P6: rate bases
-
-
-def test_the_daily_report_states_the_bankroll_its_percentages_are_of():
-    """The `% bankroll` column is a rate; the report never printed the base it
-    is a share of."""
-    runs = [busy_run("edge_taker")]
-    text = daily.report("2026-09-16", runs, ["2026-09-16"], [], pd.DataFrame(),
-                        {"selection_biased": False}, 1.0)
-    assert "$10,000" in text
-
-
-def test_a_model_with_no_forecast_is_named_rather_than_silently_absent():
-    """The random control carries no fair, so it has nothing to be scored on.
-    Dropping its row leaves a reader to wonder whether it resolved nothing or
-    was forgotten."""
-    result, m = busy_run("random_control")
-    for settlement in result.settlements:
-        settlement.position.entry_fair = float("nan")
-    text = daily.report("2026-09-16", [(result, m)], ["2026-09-16"], [],
-                        pd.DataFrame(), {"selection_biased": False}, 1.0)
-    assert "no forecast to score" in text
