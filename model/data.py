@@ -25,6 +25,8 @@ The traps this module owns:
 from __future__ import annotations
 
 import datetime as dt
+import bisect
+import functools
 import functools
 import sys
 import time
@@ -518,6 +520,41 @@ def earnings_between(symbol: str, start, end, as_of=None) -> bool:
         df = seen if len(seen) else df[df["first_seen"] == df["first_seen"].min()]
     hit = df[(df["symbol"] == symbol) & (df["when"] >= start) & (df["when"] < end)]
     return bool(len(hit))
+
+
+@functools.lru_cache(maxsize=1)
+def _poly_fee_history() -> dict:
+    """market_id -> (fetch times in ns, [(rate, exponent), ...]), oldest first."""
+    frame = _q(f"""
+        select market_id, fetched_at_utc, fees_enabled,
+               try_cast(json_extract(fee_schedule, '$.rate') as double) rate,
+               try_cast(json_extract(fee_schedule, '$.exponent') as double) exponent
+        from {_src('poly_markets')}
+        order by market_id, fetched_at_utc
+    """)
+    frame["at"] = pd.to_datetime(frame["fetched_at_utc"], format="ISO8601", utc=True)
+    frame["at"] = frame["at"].dt.as_unit("ns").astype("int64")
+    enabled = frame["fees_enabled"].fillna(False).astype(bool)
+    frame["rate"] = frame["rate"].where(enabled, 0.0).fillna(0.0)
+    frame["exponent"] = frame["exponent"].fillna(1.0)
+    return {str(market_id): (group["at"].tolist(),
+                             list(zip(group["rate"].tolist(), group["exponent"].tolist())))
+            for market_id, group in frame.groupby("market_id", sort=False)}
+
+
+def poly_fee_at(market_id: str, when) -> tuple[float, float] | None:
+    """(rate, exponent) of the fee schedule the venue listed for a market at `when`.
+
+    The newest record at or before `when`, so a replay never uses a schedule
+    from its future; before a market's first record, that first record. `None`
+    for a market never recorded. Schedules really do change: nearly every
+    market went to `zero_fees` between 2026-10-20 and 2026-10-30.
+    """
+    history = _poly_fee_history().get(str(market_id))
+    if history is None:
+        return None
+    times, schedules = history
+    return schedules[max(bisect.bisect_right(times, pd.Timestamp(when).value) - 1, 0)]
 
 
 def resolutions_upto(when: dt.datetime | str) -> pd.DataFrame:

@@ -57,7 +57,7 @@ For each prediction market:
 
 1. `fair` = Black-Scholes one-touch probability from the option smile.
 2. The price you pay is `ask` (to buy YES) or `1 - bid` (to buy NO).
-3. Fee = `0.04 x min(p, 1-p)` per share on the price paid.
+3. Fee = `0.04 x min(p, 1-p)` per share on the price paid. *(Corrected 2026-11-04: the venue charges `0.04 x p x (1-p)`, which is what the code now uses.)*
 4. `edge = fair - price - fee`.
 5. Compute `fair` **twice** — once with IV at the barrier strike, once with ATM
    IV. Keep only markets positive under both.
@@ -141,7 +141,9 @@ than shown *(unapproved)*.
   same order. Verified on 629 markets, max difference 0.0. There is no separate
   vig to hunt for.
 - **Fee = 4% of the price paid, flat**, for anything under 50c (because
-  `0.04 * p / p`). Less above 50c: ~1% at 71c.
+  `0.04 * p / p`). Less above 50c: ~1% at 71c. *(Corrected 2026-11-04: the
+  venue's `0.04 * p * (1-p)` is 4% of `1-p`: 3.2% at 20c, 2% at 50c, 1.2% at 70c.
+  The cost percentages below were measured with the old formula.)*
 - Median one-way cost as % of price, by bucket: under 5c **74%**, 5-15c 49%,
   15-35c 24%, 35-65c 15%, over 65c **8.6%**. The absolute spread barely changes
   (0.04-0.10) across the range, so cheap contracts are ruinous in percentage

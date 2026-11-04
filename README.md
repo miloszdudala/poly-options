@@ -202,11 +202,13 @@ big daily ladders run 20-31¢.
 
 ### Fees are not optional
 
-Every tracked Polymarket market carries
+Tracked Polymarket markets normally carry
 `{rate: 0.04, exponent: 1, takerOnly: true, rebateRate: 0.25}`, stored per market
-in `poly_markets.fee_schedule`. With exponent 1 the taker fee is
-`0.04 x min(p, 1-p) x shares` - on a 20¢ contract that is 0.8¢/share, **4% of
-premium**, and makers are rebated 25% instead. Any edge measured against a mid
+in `poly_markets.fee_schedule` (and `zero_fees` on most markets from 2026-10-20
+to 2026-10-30). The taker fee is `rate x p x (1-p) x shares`
+([docs](https://docs.polymarket.com/trading/fees)) - on a 20¢ contract at 4% that
+is 0.64¢/share, **3.2% of premium**, and makers are rebated 25% instead. The
+replays use each market's schedule as recorded at the time. Any edge measured against a mid
 price is measuring something untradeable: you pay the spread *and* the fee
 *(unapproved)*.
 

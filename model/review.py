@@ -21,7 +21,7 @@ Three values per position:
   same bet. It is the fair mark for a buy-and-hold book, because the bid-ask
   spread is never paid on a position held to resolution.
 * **@bid (sell all)** - what selling every open share now would raise, walking
-  down the bid ladder and paying the taker fee `0.04 * min(p, 1-p)`. Shares
+  down the bid ladder and paying the taker fee `0.04 * p * (1-p)`. Shares
   beyond the visible depth are worth nothing. It is a floor, not a forecast:
   these books are thin and wide, and the strategy does not exit.
 """
@@ -39,10 +39,12 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.append(str(HERE.parent / "data" / "src"))
 
+import bet_types  # noqa: E402
 import data  # noqa: E402
 import sim  # noqa: E402
 
 LEDGER = HERE / "store" / "ledger"
+POLYMARKET = bet_types.Polymarket()
 # A book older than this behind the newest cycle is flagged: the market has
 # probably stopped accepting orders and its last quote is a fossil.
 STALE_AFTER = pd.Timedelta(hours=2)
@@ -129,7 +131,7 @@ def sell_value(bids: pd.DataFrame, shares: float) -> tuple[float, float]:
     proceeds, left = 0.0, shares
     for row in bids.sort_values("depth_rank").itertuples():
         take = min(left, row.size)
-        proceeds += take * (row.price - sim.fee_per_share(row.price))
+        proceeds += take * (row.price - POLYMARKET.fee(row.price))
         left -= take
         if left <= 1e-9:
             break

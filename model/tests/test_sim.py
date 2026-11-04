@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 import bet_types
+import data
 import results
 import run
 import sim
@@ -44,6 +45,12 @@ def priced(market_id="m1", fair=0.40, ticker="NVDA", up=True, **extra):
             "yes_direction": "up" if up else "down", "yes_vol": "wild",
             "contract_type": "hit_up" if up else "hit_down", "level": 200.0,
             "period": "weekly", **extra}
+
+
+@pytest.fixture(autouse=True)
+def no_recorded_fee_schedules(monkeypatch):
+    """Synthetic markets have none, and these tests must not read the store."""
+    monkeypatch.setattr(data, "_poly_fee_history", lambda: {})
 
 
 class FakeType(bet_types.Polymarket):
@@ -110,11 +117,37 @@ def replay(cycles, resolutions=None, model=None, account=None):
 # ------------------------------------------------------------------ the bar
 
 
-def test_the_fee_is_four_percent_of_the_cheaper_side():
-    fee = FakeType({}).fee
-    assert fee(0.30) == pytest.approx(0.012)
-    assert fee(0.95) == pytest.approx(0.002)
-    assert fee(0.50) == pytest.approx(0.02)
+def test_the_fee_is_polymarkets_formula_at_the_finance_rate():
+    fee = bet_types.Polymarket().fee
+    assert fee(0.30) == pytest.approx(0.04 * 0.30 * 0.70)
+    assert fee(0.95) == pytest.approx(0.04 * 0.95 * 0.05)
+    assert fee(0.50) == pytest.approx(0.01)
+
+
+def test_the_fee_is_the_markets_own_schedule_at_that_moment(monkeypatch):
+    """Point in time: the holiday applies inside it, never before it was listed."""
+    at = [pd.Timestamp(t, tz="UTC").value for t in ("2026-10-01", "2026-10-20", "2026-11-02")]
+    schedules = [(0.04, 1.0), (0.0, 1.0), (0.04, 1.0)]
+    monkeypatch.setattr(data, "_poly_fee_history", lambda: {"m": (at, schedules)})
+    fee = bet_types.Polymarket().fee
+    when = lambda day: pd.Timestamp(day, tz="UTC")  # noqa: E731
+    assert fee(0.5, "m", when("2026-09-01")) == pytest.approx(0.01)   # first record
+    assert fee(0.5, "m", when("2026-10-19")) == pytest.approx(0.01)
+    assert fee(0.5, "m", when("2026-10-20")) == 0.0                   # listed at this instant
+    assert fee(0.5, "m", when("2026-10-25")) == 0.0
+    assert fee(0.5, "m", when("2026-11-02")) == pytest.approx(0.01)
+    assert fee(0.5, "unrecorded", when("2026-10-25")) == pytest.approx(0.01)
+
+
+def test_a_fee_holiday_reaches_the_cost_of_an_offer(monkeypatch):
+    now = pd.Timestamp("2026-10-25", tz="UTC")
+    rows = pd.DataFrame([priced(fair=0.60, up=True)])
+    book = asks(MON, yes=((0.50, 100.0),), no=((0.60, 100.0),))
+    charged, _ = sim.make_offers(FakeType({}), TODAYS_BAR, rows, book, set(), now)
+    assert charged[0].cost == pytest.approx(0.51)
+    monkeypatch.setattr(data, "poly_fee_at", lambda market_id, when: (0.0, 1.0))
+    free, _ = sim.make_offers(FakeType({}), TODAYS_BAR, rows, book, set(), now)
+    assert free[0].cost == pytest.approx(0.50)
 
 
 def test_todays_bar_is_unchanged():
@@ -155,7 +188,7 @@ def ladder(levels):
 
 
 def fee(price):
-    return 0.04 * min(price, 1.0 - price)
+    return 0.04 * price * (1.0 - price)
 
 
 def test_the_walk_takes_half_of_each_level_and_stops_at_the_limit():
@@ -166,9 +199,9 @@ def test_the_walk_takes_half_of_each_level_and_stops_at_the_limit():
 
 
 def test_the_walk_stops_when_the_money_runs_out():
-    taken = sim.walk_ladder(ladder([(0.30, 1000.0)]), limit=0.5, budget_usd=31.2, fee=fee)
+    taken = sim.walk_ladder(ladder([(0.30, 1000.0)]), limit=0.5, budget_usd=30.84, fee=fee)
     assert taken[0]["shares"] == pytest.approx(100.0)
-    assert taken[0]["cost_usd"] == pytest.approx(31.2)
+    assert taken[0]["cost_usd"] == pytest.approx(30.84)
 
 
 def test_a_walk_under_one_dollar_is_no_fill():
@@ -189,9 +222,9 @@ def test_an_offer_carries_what_a_model_needs():
     [bet] = offers_for({"yes": ((0.20, 100.0),), "no": ((0.85, 100.0),)})
     assert (bet.market_id, bet.side, bet.type) == ("m1", YES, "fake")
     assert bet.win_prob == pytest.approx(0.40) and bet.value == pytest.approx(0.38)
-    assert bet.cost == pytest.approx(0.208)
-    assert bet.ev == pytest.approx(0.38 - 0.208)
-    assert bet.max_usd == pytest.approx(50 * 0.208)
+    assert bet.cost == pytest.approx(0.2064)
+    assert bet.ev == pytest.approx(0.38 - 0.2064)
+    assert bet.max_usd == pytest.approx(50 * 0.2064)
     assert bet.deadline == DEADLINE
 
 
@@ -248,8 +281,8 @@ def test_the_book_shows_holdings_by_direction_and_vol():
               TUE: (asks(TUE, "b", yes=((0.20, 100.0),)), [priced("b", up=False)])}
     replay(cycles, model=model)
     book = model.seen[1][1]
-    assert book.usd_by_direction()["up"] == pytest.approx(50 * 0.208)
-    assert book.usd_by_vol() == {"calm": 0.0, "wild": pytest.approx(50 * 0.208)}
+    assert book.usd_by_direction()["up"] == pytest.approx(50 * 0.2064)
+    assert book.usd_by_vol() == {"calm": 0.0, "wild": pytest.approx(50 * 0.2064)}
     assert book.cash == math.inf
 
 
@@ -357,7 +390,7 @@ def test_max_takes_as_much_as_the_book_allows():
     cycles, res = two_weeks()
     result = replay(cycles, res, account=sim.MaxAccount())
     assert [p.shares for p in result.positions] == [500.0, 500.0]
-    assert results.summary(result)["money_in"] == pytest.approx(2 * 500 * 0.208)
+    assert results.summary(result)["money_in"] == pytest.approx(2 * 500 * 0.2064)
 
 
 def test_compound_starts_small_and_reinvests_what_comes_back():
@@ -367,7 +400,7 @@ def test_compound_starts_small_and_reinvests_what_comes_back():
     result = replay(cycles, res, account=account)
     first, second = sorted(result.positions, key=lambda p: p.entry_at)
     assert first.cost_usd == pytest.approx(100.0)
-    shares = 100.0 / 0.208
+    shares = 100.0 / 0.2064
     assert second.cost_usd == pytest.approx(shares)       # the payout, all of it
     assert account.balance == pytest.approx(0.0, abs=1e-6)
 
@@ -426,8 +459,8 @@ def test_the_summary_sets_promised_ev_against_realised_pnl():
     result = replay(cycles, res)
     m = results.summary(result)
     assert m["bets"] == 2 and m["settled"] == 1 and m["open"] == 1
-    assert m["pnl"] == pytest.approx(500.0 - 500 * 0.208)
-    assert m["settled_promised_ev"] == pytest.approx(500 * (0.38 - 0.208))
+    assert m["pnl"] == pytest.approx(500.0 - 500 * 0.2064)
+    assert m["settled_promised_ev"] == pytest.approx(500 * (0.38 - 0.2064))
     assert m["realised_over_promised"] == pytest.approx(m["pnl"] / m["settled_promised_ev"])
     assert m["periods_settled"] == 1
 

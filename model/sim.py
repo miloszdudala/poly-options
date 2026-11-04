@@ -236,7 +236,7 @@ def opposite(direction: str | None) -> str | None:
 
 
 def make_offers(bet_type, bar, priced: pd.DataFrame, asks: pd.DataFrame,
-                exclude: set[str]) -> tuple[list[Bet], dict]:
+                exclude: set[str], now=None) -> tuple[list[Bet], dict]:
     """Every bet of the cycle that clears `bar`, best return first, with the
     ladders behind them. Markets in `exclude` (already held) are left out."""
     if priced.empty or asks.empty:
@@ -248,6 +248,10 @@ def make_offers(bet_type, bar, priced: pd.DataFrame, asks: pd.DataFrame,
         if row.market_id in exclude or not np.isfinite(row.fair):
             continue
         yes_vol = row.yes_vol if isinstance(row.yes_vol, str) else None
+
+        def fee(price, market_id=row.market_id):
+            return bet_type.fee(price, market_id, now)
+
         for side in (YES, NO):
             ladder = ladders.get((row.market_id, SIDE_INDEX[side]))
             if ladder is None:
@@ -260,12 +264,12 @@ def make_offers(bet_type, bar, priced: pd.DataFrame, asks: pd.DataFrame,
                 continue
             win_prob = row.fair if side == YES else 1.0 - row.fair
             value = bar.value(win_prob, side)
-            cost = ask + bet_type.fee(ask)
+            cost = ask + fee(ask)
             if not bar.clears(value, cost, ask):
                 continue
             limit = bar.limit(value, ask)
             max_usd = sum(t["cost_usd"]
-                          for t in walk_ladder(ladder, limit, math.inf, bet_type.fee))
+                          for t in walk_ladder(ladder, limit, math.inf, fee))
             if max_usd <= 0:
                 continue
             offers.append(Bet(
@@ -392,7 +396,8 @@ def run(model, bet_type, account: Account, dates: list[str],
         account.start_cycle(now, bet_type.period)
 
         held = {m for m, _ in open_positions} | {p.market_id for p in closed}
-        offers, behind = make_offers(bet_type, model.bar, bet_type.priced(cycle_id), asks, held)
+        offers, behind = make_offers(bet_type, model.bar, bet_type.priced(cycle_id), asks, held,
+                                     now)
         if not offers:
             continue
         book = Book(open=[p.holding() for p in open_positions.values()],
@@ -421,7 +426,8 @@ def _fill(order: Order, behind: dict, open_positions: dict, held: set, account: 
     ladder, row = behind[key]
     usd = min(order.usd, bet.max_usd, account.cash())
     limit = bet.limit if order.limit is None else min(bet.limit, order.limit)
-    taken = walk_ladder(ladder, limit, usd, bet_type.fee) if usd > 0 else []
+    taken = (walk_ladder(ladder, limit, usd, lambda p: bet_type.fee(p, bet.market_id, now))
+             if usd > 0 else [])
     if not taken:
         return
     position = Position(

@@ -25,14 +25,12 @@ from engine import STALE_CHAIN_S, expiry_closes
 from sessions import nyse_sessions
 
 SKIP_STRIKE_TYPE = "strike type not priced"
-#: Kalshi taker fee, per order: round_up(m * C * P * (1 - P)) to the cent, with
-#: C contracts at price P. m = 0.07 for most markets; S&P 500 and Nasdaq-100
-#: markets use half, 0.035 (Kalshi fee schedule,
-#: https://kalshi.com/docs/kalshi-fee-schedule.pdf). Read from secondary
-#: summaries of that schedule on 2026-11-04; the PDF itself could not be
-#: fetched from the session that wrote this, so check the number against it.
-#: Charged here per share, without the per-order round-up to the cent.
-INDEX_FEE_MULTIPLIER = 0.035
+#: Kalshi taker fee per contract: 0.07 * multiplier * P * (1 - P), the fee rounded
+#: up to $0.000001 (docs.kalshi.com/getting_started/fee_rounding). These series
+#: are `quadratic` with `fee_multiplier` 1, set 2026-07-03, per Kalshi's API
+#: (/trade-api/v2/series/fee_changes, read 2026-11-04). The 0.035 half rate in
+#: older guides and the February 2026 PDF is no longer what the API lists.
+INDEX_FEE_RATE = 0.07
 
 
 class KalshiIndex(bet_types.Type):
@@ -55,8 +53,8 @@ class KalshiIndex(bet_types.Type):
             self._skipped_markets.add((reason, self._market))
             super().skip(reason)
 
-    def fee(self, price: float) -> float:
-        return INDEX_FEE_MULTIPLIER * price * (1.0 - price)
+    def fee(self, price: float, market_id: str | None = None, now=None) -> float:
+        return INDEX_FEE_RATE * price * (1.0 - price)
 
     def _series_sql(self) -> str:
         return ", ".join(f"'{s}'" for s in self.series)

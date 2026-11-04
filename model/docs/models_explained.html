@@ -118,7 +118,7 @@ pre.mermaid { background: var(--panel); border: 1px solid var(--rule); border-ra
 <div class="rule-box">
 <b>How a bet is judged</b> <span class="file">models/base.py · Bar, Bet</span>
 <ul>
-<li><b>cost</b> = best ask + Polymarket's fee, <span class="mono">0.04 × min(price, 1 − price)</span> per share.</li>
+<li><b>cost</b> = best ask + Polymarket's fee, <span class="mono">0.04 × price × (1 − price)</span> per share.</li>
 <li><b>value</b> = the win probability, minus a 2¢ risk premium on a YES (approved 2026-10-09; INSIGHTS §7.2).</li>
 <li><b>EV</b> = value − cost per share, and <b>ROI</b> = EV ÷ cost.</li>
 <li><b>Bar</b> (today's, <code>TODAYS_BAR</code>; Open in CLAUDE.md): a bet clears if EV ≥ 3¢ and ROI ≥ 8%. Above a 90¢ ask the bar is EV ≥ 0 and ROI ≥ 2%.</li>
@@ -211,7 +211,7 @@ function Ninv(p) {                      // Acklam's inverse normal, |rel error| 
 
 // --- models/base.py: Bar ---
 const YES_PREMIUM = 0.02, FEE = 0.04, DEAR = 0.90;
-const allInCost = ask => ask + FEE * Math.min(ask, 1 - ask);
+const allInCost = ask => ask + FEE * ask * (1 - ask);
 function judge({ ask, winProb, side, minEv = 0.03, minRoi = 0.08 }) {
   const cost = allInCost(ask);
   const value = winProb - (side === "YES" ? YES_PREMIUM : 0);

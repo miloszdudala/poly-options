@@ -34,7 +34,7 @@ this file. `FINDINGS.md` holds the first measurements (2026-09-16/18).
    $719. Across all equity hit markets at one snapshot: ~$89k on YES, ~$616k on
    NO. Fill price degrades fast: FINDINGS measured 0.114 → 0.145 → 0.591 for
    $0 / $100 / $500 on one ladder.
-5. **Costs.** Taker fee `0.04 × min(p, 1−p)` per share; makers are rebated 25%
+5. **Costs.** Taker fee `0.04 × p × (1−p)` per share (the market's own schedule at the time); makers are rebated 25%
    of it. YES ask + NO ask sums to ~1.07 at the top (overround is the spread,
    there is no separate vig).
 6. **Displacement has a shape.** Mid vs option-implied fair, 9,841 obs: under
@@ -70,14 +70,14 @@ Per-fill economics for a YES purchase at price `p` on a market with fair
 probability `q`:
 
 ```
-cost      = p + 0.04 * min(p, 1-p)            per share
+cost      = p + rate * p * (1-p)              per share (rate normally 0.04)
 EV        = q - cost
 ROI       = EV / cost
 payoff    = 1 at touch time (YES) or 0 at period end
 ```
 
 For a NO purchase at price `p_no` (the NO token's ask, equal to 1 − YES bid):
-`EV = (1 − q) − p_no − 0.04·min(p_no, 1−p_no)`, paid at period end.
+`EV = (1 − q) − p_no − rate·p_no·(1−p_no)`, paid at period end.
 
 **The bar** is declared by each model (`models.TODAYS_BAR` holds today's, in
 one place): EV ≥ 3¢ and ROI ≥ 8%; above a 90¢ ask, ROI ≥ 2%; every YES charged
@@ -177,8 +177,9 @@ from later cycles.
   cash. A walk under $1 is no fill.
 - A fill counts if the book had the size when we looked (`CLAUDE.md`,
   Decided; §7.1).
-- Fee per type: Polymarket `0.04 × min(p, 1−p)` per share; Kalshi index
-  markets `0.035 × p × (1−p)`.
+- Fee per type: Polymarket `rate × p × (1−p)` per share, with each market's
+  recorded schedule at the time (0.04, or 0 during the 2026-10-20 to 10-30
+  holiday); Kalshi index markets `0.07 × p × (1−p)` (multiplier 1 in Kalshi's API).
 - One market, one side, once: a market held, or held until it settled, is
   not offered again.
 

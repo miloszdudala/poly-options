@@ -16,7 +16,8 @@ What the harness asks of a type, per cycle:
   `yes_direction` ('up', 'down' or None: which way YES leans; NO leans the
   other way), `yes_vol` ('wild' or None: NO is then 'calm'), and for the
   ledger `contract_type`, `level` and `period`;
-* `fee(price)` - the venue's fee per share at that price;
+* `fee(price, market_id, now)` - the venue's fee per share at that price, on
+  that market, at that moment;
 * `resolutions(upto)` - every market that had settled by `upto`, with
   `market_id`, `result` ('Yes' / 'No'), `outcome_prices`, `settled_at_utc`;
 * `skipped` - market counts left out, by reason, for the report;
@@ -55,7 +56,7 @@ class Type:
     def priced(self, cycle_id: str) -> pd.DataFrame:
         raise NotImplementedError
 
-    def fee(self, price: float) -> float:
+    def fee(self, price: float, market_id: str | None = None, now=None) -> float:
         raise NotImplementedError
 
     def resolutions(self, upto) -> pd.DataFrame:
@@ -66,14 +67,19 @@ class Polymarket(Type):
     """Books, fee and resolutions as Polymarket's. `contract_types` picks the books."""
 
     contract_types: tuple[str, ...] = ()
-    #: MODELS 2: `0.04 * min(p, 1-p)`, charged once, on the price paid.
+    #: Polymarket's finance rate, for a market with no recorded schedule.
+    #: https://docs.polymarket.com/trading/fees
     fee_rate = 0.04
 
     def books(self, cycle_id: str) -> pd.DataFrame:
         return data.books(cycle_id, self.contract_types)
 
-    def fee(self, price: float) -> float:
-        return self.fee_rate * min(price, 1.0 - price)
+    def fee(self, price: float, market_id: str | None = None, now=None) -> float:
+        """`rate * (p * (1 - p)) ** exponent`, with the market's own schedule at
+        `now` (`poly_markets.fee_schedule`), charged once, on the price paid."""
+        known = data.poly_fee_at(market_id, now) if market_id is not None else None
+        rate, exponent = known if known is not None else (self.fee_rate, 1.0)
+        return rate * (price * (1.0 - price)) ** exponent
 
     def resolutions(self, upto) -> pd.DataFrame:
         return data.resolutions_upto(upto)

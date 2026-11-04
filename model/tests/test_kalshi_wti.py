@@ -24,10 +24,10 @@ SESSIONS = nyse_sessions()
 # ------------------------------------------------------------------ Kalshi
 
 
-def test_the_index_fee_is_half_kalshis_standard_multiplier():
+def test_the_index_fee_is_kalshis_standard_rate():
     bet_type = run.discover_types()["kalshi-index-daily-sp500"]()
-    assert bet_type.fee(0.50) == pytest.approx(0.035 * 0.25)
-    assert bet_type.fee(0.90) == pytest.approx(0.035 * 0.09)
+    assert bet_type.fee(0.50) == pytest.approx(0.07 * 0.25)
+    assert bet_type.fee(0.90) == pytest.approx(0.07 * 0.09)
     assert bet_type.fee(0.10) == pytest.approx(bet_type.fee(0.90))
 
 

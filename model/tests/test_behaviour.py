@@ -398,9 +398,11 @@ def test_every_fill_took_a_level_that_was_in_the_book(fills, asks):
 
 
 def test_fees_and_costs_are_on_the_price_paid(fills):
-    fee = 0.04 * np.minimum(fills["price"], 1 - fills["price"]) * fills["shares"]
-    assert np.allclose(fills["fee_usd"], fee, atol=1e-6)
-    assert np.allclose(fills["cost_usd"], fills["price"] * fills["shares"] + fee, atol=1e-6)
+    # 4% of p(1-p) or nothing: the market's own schedule at the time.
+    full = 0.04 * fills["price"] * (1 - fills["price"]) * fills["shares"]
+    assert (np.isclose(fills["fee_usd"], full, atol=1e-6) | np.isclose(fills["fee_usd"], 0.0)).all()
+    assert np.allclose(fills["cost_usd"], fills["price"] * fills["shares"] + fills["fee_usd"],
+                       atol=1e-6)
     # The venue minimum is per order, and one order is a walk over several
     # levels: three $0.50 levels are a valid $1.50 order. Sum the walk; the
     # per-level check this replaced failed on exactly that (2026-09-21 14:06Z).
