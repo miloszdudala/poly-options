@@ -149,8 +149,9 @@ applied. A marked comment in `engine.price_cycle` says where it would go.
 
 ### 3.5 Priced from the chain (close-above, up/down, range, Kalshi)
 
-`P(S_T > K) = e^{rT} (C(K1) − C(K2)) / (K2 − K1)`, the call spread around `K`
-at the expiry whose close is exactly the deadline (`model/types/_chain.py`).
+`P(S_T > K) = e^{rT} (C(K1) − C(K2)) / (K2 − K1)`, the call spread around `K`,
+or from the put spread below the money, at the expiry whose close is exactly the
+deadline (`model/types/_chain.py`).
 No exact expiry: the market is skipped and counted. On a flat-vol chain this
 is `N(d2)`; with strikes wide against the move to expiry it carries
 discretisation error. WTI hit markets: `model/types/_wti.py`.

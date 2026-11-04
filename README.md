@@ -221,7 +221,7 @@ generation time, ~equal to our fetch time, **not** the quote time. The hit
 engine uses `max(last_trade_time_utc)` per symbol per cycle as the quote time
 and the open of the 5-minute bar containing the book's `fetched_at_utc` as the
 spot, and reuses the smile at that spot (sticky-strike). The types priced
-straight from call spreads (`model/types/_chain.py`, Kalshi) use the quotes as
+straight from option spreads (`model/types/_chain.py`, Kalshi) use the quotes as
 they stand, so their fair is up to 15 minutes older than the book. That an
 option probability compared against a live book without the correction
 mostly measures 15 minutes of drift is a takeaway *(unapproved)*.

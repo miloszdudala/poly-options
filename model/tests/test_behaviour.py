@@ -88,6 +88,9 @@ def _ledger(table: str) -> pd.DataFrame:
     # group-by per model is a group-by per replay.
     frame = pd.concat([pd.read_parquet(p).assign(model=p.parent.parent.name) for p in parts],
                       ignore_index=True)
+    # These checks read Polymarket's hit books and the fair store, which only
+    # the hit types use. The chain and Kalshi types have their own tests.
+    frame = frame[frame["type"].str.startswith("poly-hit-")].reset_index(drop=True)
     for col in ("filled_at_utc", "entry_at_utc", "settled_at_utc", "deadline_utc"):
         if col in frame:
             frame[col] = pd.to_datetime(frame[col], format="ISO8601", utc=True, errors="coerce")
@@ -475,7 +478,7 @@ def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
             bad.append((f.model, f.market_id, f"win_prob {f.win_prob} != {win}")); continue
         if bool(row["deep_otm"]) or bool(row["no_chain"]):
             bad.append((f.model, f.market_id, "deep_otm or no_chain")); continue
-        cost = f.price + 0.04 * min(f.price, 1 - f.price)
+        cost = f.price + f.fee_usd / f.shares
         dear = f.price > 0.90
         ev_bar, roi_bar = (0.0, 0.02) if dear else (0.03, 0.08)
         if win - cost < ev_bar - 1e-9 or (win - cost) / cost < roi_bar - 1e-9:
