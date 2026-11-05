@@ -18,9 +18,6 @@ Three sections, kept apart on purpose:
   .venv/bin/python model/daily.py                        # price, re-run, report
   .venv/bin/python model/dashboard.py                    # rebuild and open the dashboard
   ```
-- **`live/`** trades it with real money, only when you start it. See
-  `live/README.md`. It reads the collector's store and shares no code with
-  `model/`.
 
 Because liquidity is thin, the **full order book** (every level, both sides, both
 outcome tokens) is stored at every snapshot. Mid, last trade and best bid/ask are
@@ -308,7 +305,7 @@ without code changes.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest data/tests model/tests live/tests -q
+.venv/bin/python -m pytest data/tests model/tests -q
 ```
 
 `data/tests` cover strike/barrier/type parsing (every string taken verbatim from the live

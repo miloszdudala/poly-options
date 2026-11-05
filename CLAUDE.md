@@ -25,15 +25,15 @@ money now; real money (starting at $50-100) later.
 2. **A refactor must not change results.** Run the simulation before and after
    on the same dates; ledgers must match. A change that is meant to move
    results goes in its own commit, separately from refactoring.
-3. **Do not decide for the user.** Strategy, thresholds, caps, which markets to
-   trade and anything in `live/` are the user's. Offer options; do not pick.
+3. **Do not decide for the user.** Strategy, thresholds, caps and which markets to
+   trade are the user's. Offer options; do not pick.
    Anything listed under "Open" below stays open until the user decides it.
 4. **Mark unapproved claims.** A takeaway in a doc that the user has not
    approved is labelled *(unapproved)*. Never build on an unapproved takeaway.
 5. **No side preference.** At equal computed edge, YES and NO are equal. No
    rule may rest on "NO did better last month".
-6. **Never touch credentials.** `live/` trades real money; no session gets
-   Polymarket keys, and no code path in `model/` may place an order.
+6. **Never touch credentials.** No session gets Polymarket keys, and no code
+   path in `model/` may place an order.
 
 ## Decided
 
@@ -65,6 +65,9 @@ money now; real money (starting at $50-100) later.
 - **WTI:** priced from USO options, vol converted at the same moneyness, with
   the contract-switch (roll) gap removed. Kalshi: kept and simulated.
 - **Reporting:** a local HTML dashboard, regenerated whenever it is opened.
+- **Real-money trading:** `live/` was removed on 2026-11-05 until there is
+  confidence in the results; the last commit with it is `251105b`. When trading
+  returns it must behave the same as the simulation.
 
 ## Focus (2026-11-05)
 
@@ -94,7 +97,6 @@ Accounts belong to the harness. `PLAN.md` T3 has the details.
   Only the risk premium was approved (2026-10-09). Each model declares its
   bar; keep today's unchanged until the user decides.
 - Whether gold, silver and the dollar index get the same conversion as WTI.
-- Whether `live/pricing_engine/` stays a separate copy of `model/` code.
 
 ## Layout
 
@@ -103,23 +105,14 @@ Accounts belong to the harness. `PLAN.md` T3 has the details.
 - `model/` - pricing (`engine.py`, `fair.py`), simulation (`sim.py`), models
   (`models/`), reports. `model/run_all.py` runs every model; writes
   `model/store/` (not in git) and `model/reports/`.
-- `live/` - the real-money trader. Dry by default. Independent of `model/`.
 - `scheduling/` - launchd jobs for the collector and the daily report.
 
 ## Commands
 
 ```bash
 .venv/bin/python -m pytest data/tests model/tests -q
-.venv/bin/python -m pytest live/tests -q
 .venv/bin/python model/run_all.py --dates 2026-09-16,... --tag name
 ```
-
-Run `live/tests` separately: `model/tests` puts `model/` on the import path,
-which fails the check that `live/` never reaches into it.
-
-Four `test_the_engine_copy_matches_model` cases (engine, fair, sessions, data)
-are expected to fail: `live/pricing_engine/` keeps its older copy until the
-user decides (see Open). Do not copy across or skip them to get a green run.
 
 Tests that read the store skip when it is absent (as in a cloud session).
 A cloud session therefore cannot run the simulation; any task whose "done

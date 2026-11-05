@@ -3,7 +3,7 @@
 The original collection spec (September 2026), kept as written except where
 marked. Everything below is read-only public data. Since then the hit markets
 became the main product, and `model/` prices and simulates every market kind
-listed here (`model/MODELS.md`, types); `live/` trades.
+listed here (`model/MODELS.md`, types).
 
 ## 1. Polymarket markets
 

@@ -186,7 +186,7 @@ ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
         <li>Past outcomes used as probabilities, fitted factors or machine learning.</li>
         <li>News, order flow or any view on direction.</li>
         <li>Selling before resolution, hedging or per-market limits.</li>
-        <li>The <span class="num">live/</span> trader, which still uses the old fee and old pricing.</li>
+        <li>Real-money trading: <span class="num">live/</span> was removed on 2026-11-05 until there is confidence in the results.</li>
       </ul>
     </div>
   </div>
@@ -247,7 +247,7 @@ const STEPS = [
     ["F", "Walk down the real asks and stop at the first level whose all-in cost breaks the bar.", "Your decided account: no bankroll or per-market limit."],
     ["J", "Take at most half of each level.", "The rest may be gone by the time an order lands. A picked number."],
     ["M", "A fill counts if the book showed the size when we looked.", "A recheck about 40 seconds later found 80-88% of filled dollars still buyable."],
-    ["F", "Skip any fill under $1.", "Treated as the venue's minimum. live/ uses a 5-share minimum."]
+    ["F", "Skip any fill under $1.", "Treated as the venue's minimum. The removed live/ trader used a 5-share minimum."]
   ]},
   { name: "Hold", sub: "No exits.", rows: [
     ["M", "Hold to resolution, never sell.", "Polymarket spreads of about 7c eat any round trip."],
