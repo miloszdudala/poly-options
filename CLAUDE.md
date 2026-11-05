@@ -109,9 +109,17 @@ Accounts belong to the harness. `PLAN.md` T3 has the details.
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest data/tests model/tests live/tests -q
+.venv/bin/python -m pytest data/tests model/tests -q
+.venv/bin/python -m pytest live/tests -q
 .venv/bin/python model/run_all.py --dates 2026-09-16,... --tag name
 ```
+
+Run `live/tests` separately: `model/tests` puts `model/` on the import path,
+which fails the check that `live/` never reaches into it.
+
+Four `test_the_engine_copy_matches_model` cases (engine, fair, sessions, data)
+are expected to fail: `live/pricing_engine/` keeps its older copy until the
+user decides (see Open). Do not copy across or skip them to get a green run.
 
 Tests that read the store skip when it is absent (as in a cloud session).
 A cloud session therefore cannot run the simulation; any task whose "done
