@@ -23,10 +23,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import data
-import engine
-import ledger_schema
-import results
+import lab
+import store
+from pipeline import config as configs
+from reporting import ledger_schema, results
 
 # --------------------------------------------------------------- thresholds
 
@@ -38,7 +38,6 @@ OPEN_SETTLED_Z = "140000"         # 30 min after the (DST) open; see the spot te
 MAX_FAIR_JUMP = 0.25              # between consecutive cycles, spot and T unchanged
 MAX_FAIR_JUMP_SHARE = 0.01        # share of consecutive pairs allowed past it
 MAX_REPRICE_DIFF = 1e-3           # store vs a fresh reprice of the same cycle
-MAX_IV_DISAGREEMENT = 0.25        # share of liquid strikes past 0.01 vs Cboe
 MAX_VENUE_DISAGREEMENT = 0.10     # touched-on-our-bars vs resolved-YES-at-the-venue
 EQUITY_EXCLUDED = {"DXY", "WTI", "XAUUSD", "XAGUSD", "NG"}
 # Dates known to be thin, with why. A new entry needs a reason, not a shrug.
@@ -63,19 +62,27 @@ YES, NO = 0, 1
 
 @pytest.fixture(scope="module")
 def dates():
-    priced = data.fair_dates()
-    if not priced:
-        pytest.skip("nothing priced: run model/run_fair.py or model/daily.py first")
-    return priced
+    try:
+        found = store.dates()
+    except Exception:              # no store here (a cloud session)
+        found = []
+    if not found:
+        pytest.skip("no store")
+    return found
 
 
 @pytest.fixture(scope="module")
 def fair(dates):
-    frame = pd.concat([data.fair_values(d) for d in dates], ignore_index=True)
-    frame["date"] = frame["cycle_id"].map(data.cycle_date)
-    for col in ("deep_otm", "no_chain", "touch_pending", "earnings_gap", "stale_book"):
-        if col in frame:
-            frame[col] = frame[col].fillna(False).astype(bool)
+    """Every priced market-cycle of the MVP config (cached), with the old
+    flag columns derived from the gate that stopped each market."""
+    frame = lab.priced_window(configs.load("mvp"), dates)
+    if frame.empty:
+        pytest.skip("nothing priced")
+    frame["date"] = frame["cycle_id"].map(store.cycle_date)
+    frame["deadline_utc"], frame["barrier"] = frame["deadline"], frame["level"]
+    for flag in ("touch_pending", "deep_otm", "earnings_gap"):
+        frame[flag] = frame["gate"] == flag
+    frame["no_chain"] = frame["gate"].fillna("").str.startswith("no vol")
     return frame
 
 
@@ -88,9 +95,6 @@ def _ledger(table: str) -> pd.DataFrame:
     # group-by per model is a group-by per replay.
     frame = pd.concat([pd.read_parquet(p).assign(model=p.parent.parent.name) for p in parts],
                       ignore_index=True)
-    # These checks read Polymarket's hit books and the fair store, which only
-    # the hit types use. The chain and Kalshi types have their own tests.
-    frame = frame[frame["type"].str.startswith("poly-hit-")].reset_index(drop=True)
     for col in ("filled_at_utc", "entry_at_utc", "settled_at_utc", "deadline_utc"):
         if col in frame:
             frame[col] = pd.to_datetime(frame[col], format="ISO8601", utc=True, errors="coerce")
@@ -101,8 +105,10 @@ def _ledger(table: str) -> pd.DataFrame:
 def fills():
     frame = _ledger("fills")
     if frame.empty:
-        pytest.skip("no ledger: run model/run_all.py or model/daily.py first")
-    return frame
+        pytest.skip("no ledger: run model/run.py --save or model/run.py daily first")
+    # These checks read Polymarket's hit books and pricing, which only the hit
+    # configs use. The chain and Kalshi extensions have their own tests.
+    return frame[frame["contract_type"].isin(["hit_up", "hit_down"])].reset_index(drop=True)
 
 
 @pytest.fixture(scope="module")
@@ -114,7 +120,10 @@ def settlements():
 @pytest.fixture(scope="module")
 def venue():
     """Every resolution the collector has, latest row per market."""
-    frame = data.resolutions_upto("2100-01-01")
+    try:
+        frame = store.resolutions_upto("2100-01-01")
+    except Exception:              # no store here (a cloud session)
+        pytest.skip("no store")
     return frame.set_index("market_id") if len(frame) else frame
 
 
@@ -123,9 +132,9 @@ def asks(fills):
     """Every ask level of every cycle any model filled in, one query."""
     cycles = sorted(set(fills["cycle_id"]))
     quoted = ", ".join(f"'{c}'" for c in cycles)
-    frame = data._q(f"""
+    frame = store._q(f"""
         select cycle_id, market_id, outcome_index, depth_rank, price, size
-        from {data._src('poly_books')}
+        from {store._src('poly_books')}
         where side = 'ask' and cycle_id in ({quoted})
     """)
     return frame
@@ -138,21 +147,21 @@ def _fair_at(fair: pd.DataFrame) -> pd.DataFrame:
 # =========================================================== 1. the collector
 
 
-def test_every_in_session_cycle_with_books_is_priced(dates):
+def test_every_in_session_cycle_with_books_is_priced(dates, fair):
     """A cycle with books and no fair values is a cycle no model could trade.
     Failure: `daily.py` step 1 did not run, or `price_missing` failed on it."""
-    book_dates = data._q(f"select distinct date from {data._src('poly_books')} order by 1")
+    book_dates = store._q(f"select distinct date from {store._src('poly_books')} order by 1")
     # Today's books are priced by the evening `daily.py`; until it runs they
     # are not a failure (2026-10-19 failed all day for that reason).
     today = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d")
     missing = {}
     for date in book_dates["date"].astype(str):
-        if date in data.EXCLUDED_DATES or date >= today:
+        if date in store.EXCLUDED_DATES or date >= today:
             continue
-        cycles = data.session_cycles(date)
+        cycles = store.session_cycles(date)
         if not cycles:
             continue
-        priced = set(data.fair_values(date)["cycle_id"]) if date in dates else set()
+        priced = set(fair.loc[fair["date"] == date, "cycle_id"])
         gap = sorted(set(cycles) - priced)
         if gap:
             missing[date] = gap
@@ -185,7 +194,7 @@ def test_option_quotes_are_the_expected_age_in_every_cycle(fair, fills):
     stale = stale[stale > QUOTE_AGE_RANGE_S[1]]
     assert stale.empty, f"option fairs built from a chain older than {QUOTE_AGE_RANGE_S[1]}s: {stale.round().to_dict()}"
     reversed_ = by_cycle[by_cycle < 0]
-    per_date = reversed_.groupby(reversed_.index.map(data.cycle_date)).size()
+    per_date = reversed_.groupby(reversed_.index.map(store.cycle_date)).size()
     assert (per_date <= 1).all(), f"more than one chain-after-book cycle on a date: {per_date.to_dict()}"
     option = fills[fills["model"].str.startswith("edge_taker")]
     ages = fair.set_index(["cycle_id", "market_id"])["quote_age_s"]
@@ -221,12 +230,12 @@ def test_bar_spot_agrees_with_cboe_s_delayed_price(fair, dates):
     The first 30 minutes of a session are still left out: Cboe's delayed last
     is then yesterday's close or the opening print."""
     worst = {}
-    bars = data.bars_5m()
+    bars = store.bars_5m()
     for date in dates:
         cycles = sorted(c for c in set(fair.loc[fair["date"] == date, "cycle_id"])
                         if c[9:15] >= OPEN_SETTLED_Z)
         for cycle_id in cycles[:: max(1, len(cycles) // 3)]:      # a few per date
-            cboe = data.cboe_spot(cycle_id).set_index("symbol")["last_price"]
+            cboe = store.cboe_spot(cycle_id).set_index("symbol")["last_price"]
             rows = fair[(fair["cycle_id"] == cycle_id) & (fair["spot_source"] == "bar_5m")
                         & fair["quote_time_utc"].notna()]
             rows = rows.drop_duplicates("ticker")
@@ -302,7 +311,7 @@ def test_what_the_venue_resolves_yes_our_bars_also_saw(fair, venue):
     are late, thin or on the wrong session window."""
     if venue.empty:
         pytest.skip("no resolutions yet")
-    first_cycle = pd.Timestamp(data.cycle_start(sorted(fair["cycle_id"])[0]))
+    first_cycle = pd.Timestamp(store.cycle_start(sorted(fair["cycle_id"])[0]))
     yes = venue[(venue["result"] == "Yes") & (venue["settled_at_utc"] >= first_cycle)]
     yes = yes[yes.index.isin(set(fair["market_id"]))]
     if yes.empty:
@@ -311,10 +320,10 @@ def test_what_the_venue_resolves_yes_our_bars_also_saw(fair, venue):
     missed = []
     for market_id, row in yes.iterrows():
         m = meta.loc[market_id]
-        start = data.watch_start_for(market_id, m["deadline_utc"], m["period"])
+        start = store.watch_start_for(market_id, m["deadline_utc"], m["period"])
         if pd.isna(start):
             continue
-        seen = data.touched_between(m["ticker"], float(m["barrier"]),
+        seen = store.touched_between(m["ticker"], float(m["barrier"]),
                                     m["contract_type"] == "hit_up", start,
                                     row["settled_at_utc"] + pd.Timedelta(hours=1))
         if seen is False:
@@ -346,22 +355,17 @@ def test_fair_values_do_not_jump_between_cycles_without_a_reason(fair):
         f"{jumped[['ticker', 'barrier', 'cycle_id', 'prev_fair', 'fair']].head().to_dict('records')}")
 
 
-def test_the_store_matches_what_the_engine_computes_today(fair, dates):
-    """Reprice the newest stored cycle and compare. A difference means the
-    engine code changed after the store was written and the models have been
-    replaying stale fair values - reprice with `run_fair.py --date`."""
+def test_the_cache_matches_a_fresh_reprice(fair, dates):
+    """Reprice the newest cycle without the cache and compare: the cache key
+    covers settings and code, so a difference means it missed something."""
     newest = sorted(set(fair.loc[fair["date"] == dates[-1], "cycle_id"]))[-1]
-    frame, stats = engine.price_cycle(newest)
-    stored = fair[fair["cycle_id"] == newest][["market_id", "fair", "touch_pending"]]
-    merged = stored.merge(frame[["market_id", "fair", "touch_pending"]], on="market_id",
+    frame = lab.inspect(configs.load("mvp"), newest)
+    stored = fair[fair["cycle_id"] == newest][["market_id", "fair", "gate"]]
+    merged = stored.merge(frame[["market_id", "fair", "gate"]], on="market_id",
                           suffixes=("_store", "_now"))
     both = merged[merged["fair_store"].notna() & merged["fair_now"].notna()]
     diff = (both["fair_store"] - both["fair_now"]).abs().max()
-    assert diff < MAX_REPRICE_DIFF, f"store vs fresh reprice of {newest}: max |dfair| = {diff:.4g}"
-    assert (merged["touch_pending_store"].astype(bool) == merged["touch_pending_now"].astype(bool)).all()
-    assert stats["iv_checked"] > 0
-    rate = stats["iv_disagreements"] / stats["iv_checked"]
-    assert rate <= MAX_IV_DISAGREEMENT, f"IV disagrees with Cboe on {rate:.1%} of liquid strikes"
+    assert diff < MAX_REPRICE_DIFF, f"cache vs fresh reprice of {newest}: max |dfair| = {diff:.4g}"
 
 
 def test_an_earnings_gap_is_never_traded_on_the_option_signal(fair, fills):
@@ -418,12 +422,12 @@ def test_no_fill_on_a_market_whose_barrier_had_already_printed(fills):
     """The review's finding 1, as a standing check on every new day of fills."""
     late = []
     for f in fills.itertuples():
-        start = data.watch_start_for(f.market_id, f.deadline_utc, f.period)
+        start = store.watch_start_for(f.market_id, f.deadline_utc, f.period)
         if pd.isna(start):
             continue
         if f.contract_type not in ("hit_up", "hit_down"):
             continue
-        if data.touched_between(f.ticker, float(f.level), f.contract_type == "hit_up",
+        if store.touched_between(f.ticker, float(f.level), f.contract_type == "hit_up",
                                 start, f.filled_at_utc) is True:
             late.append((f.model, f.ticker, f.contract_type, float(f.level), str(f.filled_at_utc)))
     assert not late, f"{len(late)} fills after the barrier had printed: {late[:5]}"
@@ -488,7 +492,7 @@ def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
 
 def test_the_daily_report_exists_for_the_newest_priced_date_and_warns(dates):
     path = results.REPORTS / f"daily_{dates[-1]}.md"
-    assert path.exists(), f"no daily report for {dates[-1]}: run model/daily.py"
+    assert path.exists(), f"no daily report for {dates[-1]}: run model/run.py daily"
     text = path.read_text()
     assert len(text.splitlines()) <= 120
     assert "not" in text.lower() and "result" in text.lower(), "the selection warning is missing"

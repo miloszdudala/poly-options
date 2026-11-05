@@ -12,11 +12,12 @@ Three sections, kept apart on purpose:
   data has taught us. Commands:
 
   ```bash
-  .venv/bin/python model/run_fair.py --date 2026-09-16   # price a date's hit markets
-  .venv/bin/python model/run.py --help                   # any model x type x account x dates
-  .venv/bin/python model/run_all.py --dates 2026-09-16,... --tag name
-  .venv/bin/python model/daily.py                        # price, re-run, report
-  .venv/bin/python model/dashboard.py                    # rebuild and open the dashboard
+  .venv/bin/python model/run.py --help                   # replay configs (default: mvp, control)
+  .venv/bin/python model/run.py --dates 2026-09-16,... --save --tag name
+  .venv/bin/python model/run.py daily                    # replay, write the daily report
+  .venv/bin/python model/run.py sample --synthetic --out model/samples/synthetic
+  .venv/bin/python model/run.py --store model/samples/synthetic lab sweep --vary bar.min_ev=0.03,0.1
+  .venv/bin/python model/run.py dashboard                # rebuild and open the dashboard
   ```
 
 Because liquidity is thin, the **full order book** (every level, both sides, both
@@ -218,7 +219,7 @@ generation time, ~equal to our fetch time, **not** the quote time. The hit
 engine uses `max(last_trade_time_utc)` per symbol per cycle as the quote time
 and the open of the 5-minute bar containing the book's `fetched_at_utc` as the
 spot, and reuses the smile at that spot (sticky-strike). The types priced
-straight from option spreads (`model/types/_chain.py`, Kalshi) use the quotes as
+straight from option spreads (`prob.call_spread`) use the quotes as
 they stand, so their fair is up to 15 minutes older than the book. That an
 option probability compared against a live book without the correction
 mostly measures 15 minutes of drift is a takeaway *(unapproved)*.

@@ -1,0 +1,9 @@
+# Extension: Polymarket monthly close_above markets on stocks, priced from the call
+# spread at the expiry that closes exactly at the deadline (none: skipped).
+extends: mvp
+markets: {use: polymarket_chain, contract_type: close_above, period: monthly,
+          exclude_tickers: [WTI, XAUUSD, XAGUSD, DXY, GLD, SLV, USO, UUP]}
+inputs: {use: chain}
+vol: {use: none}
+prob: {use: call_spread, stale_chain_s: 1800}
+gates: {use: standard, drop: [no_fair]}

@@ -1,12 +1,8 @@
 import logging
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parent.parent
-STORE = ROOT.parent / "data" / "store"
 sys.path.insert(0, str(ROOT))                        # model/ wins: both it and
 sys.path.append(str(ROOT.parent / "data" / "src"))   # data/src define `schemas`
 
@@ -22,6 +18,15 @@ def pytest_configure(config):
 
     util._log_configured = True
     logging.getLogger().addHandler(logging.NullHandler())
+
+
+from contextlib import contextmanager  # noqa: E402
+
+import pytest  # noqa: E402
+
+import pipeline  # noqa: E402,F401  (registers the step variants)
+
+STORE = ROOT.parent / "data" / "store"
 
 
 @contextmanager
@@ -50,3 +55,24 @@ def pytest_runtest_setup(item):
 def pytest_runtest_call(item):
     with _skip_without_store():
         return (yield)
+
+
+@pytest.fixture(scope="session")
+def synthetic_root(tmp_path_factory):
+    """The made-up store of `synthetic.py`, built once per test session."""
+    import synthetic
+
+    return synthetic.build(tmp_path_factory.mktemp("synthetic") / "parquet")
+
+
+@pytest.fixture
+def synthetic_store(synthetic_root, tmp_path, monkeypatch):
+    """Read the synthetic store, with a cache of this test's own."""
+    import store
+    from pipeline import cache
+
+    previous = store.ROOT
+    store.use(synthetic_root)
+    monkeypatch.setattr(cache, "ROOT", tmp_path / "cache")
+    yield synthetic_root
+    store.use(previous)

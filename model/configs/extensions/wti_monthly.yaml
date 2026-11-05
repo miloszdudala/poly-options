@@ -1,0 +1,11 @@
+# Extension: Polymarket monthly "WTI hit $B" markets (pipeline/wti.py): spot on
+# the contract Active at the deadline, USO vol at the same moneyness times the
+# WTI/USO realised-vol ratio, continuous one-touch, touches in ICE hours.
+# Prices nothing until vol.vol_ratio is set (open: measured 1.06-1.09) and the
+# collector stores the next contract's price (CL<month><yy>.NYM).
+extends: mvp
+markets: {use: polymarket_hit, period: monthly, include_tickers: [WTI], exclude_tickers: []}
+inputs: {use: wti}
+vol: {use: uso_same_moneyness, vol_ratio: null, stale_chain_s: 1800}
+prob: {use: one_touch}
+gates: {use: standard, drop: [touch_pending, no_fair]}

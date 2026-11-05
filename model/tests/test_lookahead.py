@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-import data
+import store
 
 MIDSESSION = pd.Timestamp("2026-09-16T14:00:00Z")
 
@@ -38,7 +38,7 @@ def test_the_store_stamps_a_daily_bar_at_eastern_midnight():
     """Load-bearing for `daily_bars_asof`, which normalises in Eastern to find
     the session a bar belongs to. If the store ever switched to 00:00Z, every
     winter bar would move a day and the as-of cut would be off by one."""
-    stamps = data.daily_bars("SPY")["bar_time"].dt.tz_convert("America/New_York")
+    stamps = store.daily_bars("SPY")["bar_time"].dt.tz_convert("America/New_York")
     assert set(stamps.dt.hour) == {0}
     assert set(stamps.dt.minute) == {0}
 
@@ -50,15 +50,15 @@ def test_a_bar_stamped_today_is_not_visible_during_todays_session(monkeypatch):
     """`2026-09-16T04:00Z` carries the 16:00 ET close of 2026-09-16. A cycle at
     14:00Z that same day must not see it."""
     bars = synthetic(["2026-09-14", "2026-09-15", "2026-09-16"], [100.0, 101.0, 90.0])
-    monkeypatch.setattr(data, "daily_bars", lambda symbol: bars)
-    visible = data.daily_bars_asof("X", MIDSESSION)
+    monkeypatch.setattr(store, "daily_bars", lambda symbol: bars)
+    visible = store.daily_bars_asof("X", MIDSESSION)
     assert list(visible["close"]) == [100.0, 101.0]
 
 
 def test_yesterdays_bar_is_visible_because_its_session_has_closed(monkeypatch):
     bars = synthetic(["2026-09-14", "2026-09-15"], [100.0, 101.0])
-    monkeypatch.setattr(data, "daily_bars", lambda symbol: bars)
-    assert len(data.daily_bars_asof("X", MIDSESSION)) == 2
+    monkeypatch.setattr(store, "daily_bars", lambda symbol: bars)
+    assert len(store.daily_bars_asof("X", MIDSESSION)) == 2
 
 
 def test_todays_bar_becomes_visible_once_todays_session_has_closed(monkeypatch):
@@ -66,9 +66,9 @@ def test_todays_bar_becomes_visible_once_todays_session_has_closed(monkeypatch):
     replay asks for this - cycles stop at 20:00Z - but a rule that only works
     inside the session is a rule waiting to be wrong."""
     bars = synthetic(["2026-09-15", "2026-09-16"], [101.0, 90.0])
-    monkeypatch.setattr(data, "daily_bars", lambda symbol: bars)
+    monkeypatch.setattr(store, "daily_bars", lambda symbol: bars)
     after = pd.Timestamp("2026-09-16T21:00:00Z")
-    assert list(data.daily_bars_asof("X", after)["close"]) == [101.0, 90.0]
+    assert list(store.daily_bars_asof("X", after)["close"]) == [101.0, 90.0]
 
 
 # ----------------------------------------------------- duplicated bar times
@@ -81,17 +81,17 @@ def test_the_store_returns_one_daily_bar_per_timestamp():
     decimal. A duplicate is a spurious zero return in the EWMA and a spurious
     same-day 'gap' in `f`, on every ticker at once."""
     for ticker in ("SPY", "NVDA", "PLTR", "EWY", "AAPL", "TSLA"):
-        bars = data.daily_bars(ticker)
+        bars = store.daily_bars(ticker)
         assert bars["bar_time"].is_unique, ticker
 
 
 def test_duplicate_bars_are_removed_before_anything_derives_from_them(monkeypatch):
     bars = synthetic(["2026-09-14", "2026-09-15", "2026-09-15"],
                      [100.0, 101.0, 101.5])
-    monkeypatch.setattr(data, "_q", lambda sql: bars.drop(columns=["bar_time"]))
-    data.daily_bars.cache_clear()
-    out = data.daily_bars("X")
-    data.daily_bars.cache_clear()
+    monkeypatch.setattr(store, "_q", lambda sql: bars.drop(columns=["bar_time"]))
+    store.daily_bars.cache_clear()
+    out = store.daily_bars("X")
+    store.daily_bars.cache_clear()
     assert len(out) == 2
     assert out["close"].iloc[-1] == 101.5      # last write wins
 
@@ -112,8 +112,8 @@ def test_spot_is_the_open_of_the_containing_bar_never_its_close(monkeypatch):
     bars = five_minute("X", ["2026-09-16T15:45:00Z", "2026-09-16T15:50:00Z"],
                        opens=[100.0, 101.0], highs=[101.5, 108.0], lows=[99.0, 100.0],
                        closes=[101.0, 108.0])
-    monkeypatch.setattr(data, "bars_5m", lambda: bars)
-    spot = data.spot_at(pd.Series([pd.Timestamp("2026-09-16T15:51:29Z")]), pd.Series(["X"]))
+    monkeypatch.setattr(store, "bars_5m", lambda: bars)
+    spot = store.spot_at(pd.Series([pd.Timestamp("2026-09-16T15:51:29Z")]), pd.Series(["X"]))
     assert spot.iloc[0] == 101.0
 
 
@@ -123,13 +123,13 @@ def test_a_barrier_printed_earlier_in_the_window_is_a_touch(monkeypatch):
     bars = five_minute("SPY", ["2026-09-16T19:25:00Z", "2026-09-16T19:30:00Z"],
                        opens=[751.0, 750.5], highs=[751.5, 752.5], lows=[749.6, 750.4],
                        closes=[750.5, 752.4])
-    monkeypatch.setattr(data, "bars_5m", lambda: bars)
-    data.session_bars_5m.cache_clear()
-    assert data.touched_between("SPY", 750.0, False, "2026-09-14T04:00:00Z",
+    monkeypatch.setattr(store, "bars_5m", lambda: bars)
+    store.session_bars_5m.cache_clear()
+    assert store.touched_between("SPY", 750.0, False, "2026-09-14T04:00:00Z",
                                 "2026-09-16T19:36:37Z") is True
-    assert data.touched_between("SPY", 749.0, False, "2026-09-14T04:00:00Z",
+    assert store.touched_between("SPY", 749.0, False, "2026-09-14T04:00:00Z",
                                 "2026-09-16T19:36:37Z") is False
-    assert data.touched_between("SPY", 752.5, True, "2026-09-14T04:00:00Z",
+    assert store.touched_between("SPY", 752.5, True, "2026-09-14T04:00:00Z",
                                 "2026-09-16T19:36:37Z") is True
 
 
@@ -137,12 +137,12 @@ def test_the_touch_check_ignores_the_bar_still_forming(monkeypatch):
     bars = five_minute("X", ["2026-09-16T19:30:00Z", "2026-09-16T19:35:00Z"],
                        opens=[100.0, 100.0], highs=[100.5, 120.0], lows=[99.5, 99.0],
                        closes=[100.0, 120.0])
-    monkeypatch.setattr(data, "bars_5m", lambda: bars)
-    data.session_bars_5m.cache_clear()
+    monkeypatch.setattr(store, "bars_5m", lambda: bars)
+    store.session_bars_5m.cache_clear()
     # 19:35 bar finishes at 19:40: unknown at 19:37, known at 19:40.
-    assert data.touched_between("X", 110.0, True, "2026-09-16T00:00:00Z",
+    assert store.touched_between("X", 110.0, True, "2026-09-16T00:00:00Z",
                                 "2026-09-16T19:37:00Z") is False
-    assert data.touched_between("X", 110.0, True, "2026-09-16T00:00:00Z",
+    assert store.touched_between("X", 110.0, True, "2026-09-16T00:00:00Z",
                                 "2026-09-16T19:40:00Z") is True
 
 
@@ -153,11 +153,11 @@ def test_the_touch_check_ignores_extended_hours_and_the_time_before_the_period(m
                              "2026-09-16T14:00:00Z"],  # regular hours
                        opens=[100.0] * 3, highs=[130.0, 125.0, 101.0],
                        lows=[99.0] * 3, closes=[100.0] * 3)
-    monkeypatch.setattr(data, "bars_5m", lambda: bars)
-    data.session_bars_5m.cache_clear()
-    assert data.touched_between("X", 120.0, True, "2026-09-16T04:00:00Z",
+    monkeypatch.setattr(store, "bars_5m", lambda: bars)
+    store.session_bars_5m.cache_clear()
+    assert store.touched_between("X", 120.0, True, "2026-09-16T04:00:00Z",
                                 "2026-09-16T15:00:00Z") is False
-    assert data.touched_between("Y", 120.0, True, "2026-09-16T04:00:00Z",
+    assert store.touched_between("Y", 120.0, True, "2026-09-16T04:00:00Z",
                                 "2026-09-16T15:00:00Z") is None
 
 
@@ -197,20 +197,20 @@ def test_the_touch_check_falls_back_to_hourly_and_daily_bars(monkeypatch):
     """Before 2026-06-22 there are no 5-minute bars; the hourly and daily
     series carry the same regular-session highs and lows."""
     empty = five_minute("X", [], [], [], [], [])
-    monkeypatch.setattr(data, "bars_5m", lambda: empty)
+    monkeypatch.setattr(store, "bars_5m", lambda: empty)
     hourly = five_minute("X", ["2026-03-03T14:30:00Z"], opens=[100.0], highs=[112.0],
                          lows=[99.0], closes=[101.0])
-    monkeypatch.setattr(data, "bars_1h", lambda: hourly)
+    monkeypatch.setattr(store, "bars_1h", lambda: hourly)
     daily = synthetic(["2026-03-02"], closes=[100.0], highs=[105.0], lows=[90.0])
-    monkeypatch.setattr(data, "daily_bars", lambda symbol: daily)
-    data.session_bars_5m.cache_clear(); data.session_bars_1h.cache_clear()
+    monkeypatch.setattr(store, "daily_bars", lambda symbol: daily)
+    store.session_bars_5m.cache_clear(); store.session_bars_1h.cache_clear()
     start = "2026-03-02T05:00:00Z"
     # The hourly bar is finished at 15:30Z, not at 15:00Z.
-    assert data.touched_between("X", 110.0, True, start, "2026-03-03T15:00:00Z") is False
-    assert data.touched_between("X", 110.0, True, start, "2026-03-03T15:30:00Z") is True
+    assert store.touched_between("X", 110.0, True, start, "2026-03-03T15:00:00Z") is False
+    assert store.touched_between("X", 110.0, True, start, "2026-03-03T15:30:00Z") is True
     # The daily bar of 03-02 is known from 16:00 ET that day.
-    assert not data.touched_between("X", 92.0, False, start, "2026-03-02T20:00:00Z")
-    assert data.touched_between("X", 92.0, False, start, "2026-03-02T21:00:00Z") is True
+    assert not store.touched_between("X", 92.0, False, start, "2026-03-02T20:00:00Z")
+    assert store.touched_between("X", 92.0, False, start, "2026-03-02T21:00:00Z") is True
 
 
 def test_earnings_intervals_are_half_open_and_as_of_falls_back_to_the_first_fetch(monkeypatch):
@@ -221,16 +221,16 @@ def test_earnings_intervals_are_half_open_and_as_of_falls_back_to_the_first_fetc
         "when": pd.to_datetime(["2026-09-30T20:00:00Z", "2026-12-16T21:00:00Z"], utc=True),
         "first_seen": pd.to_datetime(["2026-09-16T21:44:00Z", "2026-10-05T21:44:00Z"], utc=True),
     })
-    monkeypatch.setattr(data, "upcoming_earnings", lambda: table)
+    monkeypatch.setattr(store, "upcoming_earnings", lambda: table)
     deadline = pd.Timestamp("2026-09-30T20:00:00Z")
     after = pd.Timestamp("2026-10-02T20:00:00Z")
-    assert data.earnings_between("MU", "2026-09-16T14:00:00Z", deadline) is False
-    assert data.earnings_between("MU", deadline, after) is True
+    assert store.earnings_between("MU", "2026-09-16T14:00:00Z", deadline) is False
+    assert store.earnings_between("MU", deadline, after) is True
     # A date first fetched in October is invisible to a September cycle, but
     # a cycle before the first fetch of all still sees the earliest fetch.
-    assert data.earnings_between("MU", "2026-12-01", "2026-12-31",
+    assert store.earnings_between("MU", "2026-12-01", "2026-12-31",
                                  as_of="2026-09-20T14:00:00Z") is False
-    assert data.earnings_between("MU", deadline, after, as_of="2026-09-16T14:00:00Z") is True
+    assert store.earnings_between("MU", deadline, after, as_of="2026-09-16T14:00:00Z") is True
 
 
 def test_a_same_day_settlement_is_seen_by_a_later_cycle(tmp_path, monkeypatch):
@@ -248,10 +248,10 @@ def test_a_same_day_settlement_is_seen_by_a_later_cycle(tmp_path, monkeypatch):
             "ticker": ["META", "DXY"], "contract_type": ["hit_down", "hit_up"],
             "barrier": [720.0, 102.5], "outcome_prices": ["[1, 0]", "[1, 0]"]}
     pq.write_table(pa.table(rows), table / "part-0.parquet")
-    monkeypatch.setattr(data, "PARQUET_DIR", tmp_path)
+    monkeypatch.setattr(store, "ROOT", tmp_path)
     for cutoff in (pd.Timestamp("2026-10-08T19:45:01Z"), "2026-10-08 19:45:01+00:00",
                    pd.Timestamp("2026-10-08 15:45:01", tz="America/New_York")):
-        seen = set(data.resolutions_upto(cutoff)["market_id"])
+        seen = set(store.resolutions_upto(cutoff)["market_id"])
         assert seen == {"early"}, cutoff
 
 
@@ -271,7 +271,7 @@ def test_daily_bars_keep_the_newest_non_empty_version(tmp_path, monkeypatch):
                                "2026-09-24T20:40:16+00:00"]}
     for i in range(3):        # one file per row, so file order cannot decide it
         pq.write_table(pa.table({k: [v[i]] for k, v in rows.items()}), table / f"part-{i}.parquet")
-    monkeypatch.setattr(data, "PARQUET_DIR", tmp_path)
-    bars = data.daily_bars.__wrapped__("META") if hasattr(data.daily_bars, "__wrapped__") \
-        else data.daily_bars("META")
+    monkeypatch.setattr(store, "ROOT", tmp_path)
+    bars = store.daily_bars.__wrapped__("META") if hasattr(store.daily_bars, "__wrapped__") \
+        else store.daily_bars("META")
     assert bars["close"].tolist() == [736.599976]

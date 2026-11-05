@@ -1,0 +1,45 @@
+# The basic model: one type of market, one model, one account.
+# Every other config extends this one and changes a step or two.
+# Each step's choices and their status (decided / open / guess): DECISIONS.md.
+name: mvp
+venue:                                      # 0. books, cycles and results from Polymarket
+  use: polymarket
+markets:                                    # 1. Polymarket weekly hit markets on stocks
+  use: polymarket_hit
+  period: weekly
+  exclude_tickers: [WTI, XAUUSD, XAGUSD, DXY, GLD, SLV, USO, UUP]
+inputs:                                     # 2. spot from 5-minute bars; refuse cycles without bars
+  use: hit
+  require_bars: true
+  stale_book_s: 900
+vol:                                        # 3. decided: ATM vol, first expiry at or after the deadline
+  use: atm_first_expiry_after
+  stale_chain_s: 1800
+prob:                                       # 4. decided: touch over regular hours only
+  use: regular_hours
+  default_f: 0.6                            #    guess: f when under min_sessions of daily bars
+  min_sessions: 60
+  f_clip: [0.05, 0.99]
+  paths: 20000
+  seed: 20260916
+gates:                                      # 5. which priced markets may be traded, in this order
+  use: standard
+  drop: [touch_pending, no_fair, deep_otm, earnings_gap, quote_ahead_of_book]
+  deep_otm_sd: 2.5
+fee:                                        # 6. decided: the market's own schedule at the time;
+  use: polymarket                           #    rate x (p(1-p))^exponent, 0.04 if never recorded
+  rate: 0.04
+bar:                                        # 7. Open: only yes_premium is approved (2026-10-09)
+  min_ev: 0.03
+  min_roi: 0.08
+  dear_price: 0.90
+  dear_min_ev: 0.0
+  dear_min_roi: 0.02
+  yes_premium: 0.02
+sizing:                                     # 8. the model
+  use: edge_taker
+fills:                                      # 9. take at most half a level; $1 minimum
+  take_fraction: 0.5
+  min_fill_usd: 1.0
+account:                                    # 10. decided: max bets, no ceiling
+  use: max

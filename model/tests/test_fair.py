@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import fair
+from pipeline import maths as fair
 
 
 # --------------------------------------------------------- Black-Scholes
@@ -174,24 +174,6 @@ def test_deep_otm_fires_past_two_and_a_half_standard_moves():
 def test_deep_otm_fires_when_there_is_no_vol_to_judge_by():
     assert fair.deep_otm(100.0, 105.0, float("nan"), 0.01)
     assert fair.deep_otm(100.0, 105.0, 0.45, 0.0)
-
-
-def test_flags_render_only_what_is_set():
-    flags = fair.Flags()
-    assert flags.as_string() == ""
-    flags.set("deep_otm")
-    flags.set("stale_book")
-    assert flags.as_string() == "deep_otm,stale_book"
-    assert flags.columns()["flags"] == "deep_otm,stale_book"
-    assert flags.columns()["no_chain"] is False
-
-
-def test_an_unknown_flag_is_an_error_not_a_new_attribute():
-    with pytest.raises(AttributeError):
-        fair.Flags().set("clamped_strike")
-
-
-# ---------------------------------------------- regular-hours touch
 
 
 def _pool(legs=12, paths=40_000, seed=1):

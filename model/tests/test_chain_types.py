@@ -1,5 +1,6 @@
-"""The types priced straight from the option chain, on a synthetic flat-vol
-chain whose answer is known: a call spread there is N(d2)."""
+"""The extensions priced straight from the option chain (markets
+`polymarket_chain`, prob `call_spread`), on a synthetic flat-vol chain whose
+answer is known: a call spread there is N(d2)."""
 from __future__ import annotations
 
 import math
@@ -8,12 +9,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import data
-import fair
-import run
-
-run.discover_types()        # puts model/types on sys.path, for `_chain`
-from _chain import prob_above  # noqa: E402
+import store
+from pipeline import config as configs, maths as fair, settle
+from pipeline.core import Cycle, price
+from pipeline.prob import prob_above, settled_at_the_close
 
 CYCLE = "20260916T150000Z-aaaaaa"          # Wednesday 16 Sep, 11:00 ET
 NOW = pd.Timestamp("2026-09-16T15:00:00Z")
@@ -41,6 +40,13 @@ def calls(expiry=FRIDAY, strikes=STRIKES, years=YEARS):
         for kind in ("call", "put")], ignore_index=True)
 
 
+def up_down_bars():
+    return pd.DataFrame({"symbol": "NVDA",
+                         "bar_time": pd.to_datetime(["2026-09-15T19:55:00Z",
+                                                     "2026-09-16T13:30:00Z"], utc=True),
+                         "open": [98.5, 200.0], "close": [99.0, 201.0]})
+
+
 def test_a_call_spread_on_a_flat_vol_chain_is_n_d2():
     for level in (95.0, 100.0, 104.0):           # listed: the spread is centred
         assert prob_above(calls(), level, RATE, YEARS) == pytest.approx(n_d2(level), abs=2e-3)
@@ -55,139 +61,128 @@ def test_a_level_below_the_money_is_read_from_the_puts():
     assert prob_above(chain, 85.0, RATE, YEARS) == pytest.approx(n_d2(85.0), abs=2e-3)
 
 
+def test_morning_settled_index_options_are_dropped_on_a_third_friday():
+    chain = pd.DataFrame({"contract_symbol": ["SPX261016C05000000", "SPXW261016C05000000",
+                                              "NDX261016C20000000", "NDXP261016C20000000",
+                                              "NVDA261016C00100000"]})
+    assert list(settled_at_the_close(chain)["contract_symbol"]) == [
+        "SPXW261016C05000000", "NDXP261016C20000000", "NVDA261016C00100000"]
+
+
 def test_a_level_outside_the_listed_strikes_has_no_price():
     assert math.isnan(prob_above(calls(), 130.0, RATE, YEARS))
 
 
-# ------------------------------------------------------------- the types
-
-
-def wire(monkeypatch, bet_type, contract_type, period, terms, end_date, chain=None):
-    """One market `m1` on NVDA, its books, its terms and the chain, in memory."""
-    books = pd.DataFrame([{"cycle_id": CYCLE, "fetched_at_utc": NOW, "market_id": "m1",
-                           "ticker": "NVDA", "contract_type": contract_type,
-                           "end_date": pd.Timestamp(end_date, tz="UTC"), "period": period,
-                           "outcome_index": i, "side": "ask", "depth_rank": 0,
-                           "price": 0.5, "size": 100.0} for i in (0, 1)])
-    monkeypatch.setattr(data, "books", lambda cycle_id, types: books)
-    monkeypatch.setattr(data, "option_chain", lambda cycle_id, symbols: (
-        calls() if chain is None else chain))
-    monkeypatch.setattr(data, "quote_times", lambda cycle_id: pd.Series(
-        {"NVDA": NOW}, dtype="object"))
-    monkeypatch.setattr(data, "risk_free_rate", lambda when: RATE)
-    bet_type._terms = pd.DataFrame([{"market_id": "m1", "ticker": "NVDA",
-                                     "contract_type": contract_type, **terms}]).set_index("market_id")
-    return bet_type
-
-
-def priced(monkeypatch, name, contract_type, period, terms, end_date, chain=None):
-    bet_type = run.discover_types()[name]()
-    wire(monkeypatch, bet_type, contract_type, period, terms, end_date, chain)
-    return bet_type, bet_type.priced(CYCLE)
+# ---------------------------------------------------------- the extensions
 
 
 FRIDAY_END = "2026-09-18T23:59:59"
 
 
+def priced(monkeypatch, config_name, contract_type, period, terms, end_date, chain=None,
+           quote_age=pd.Timedelta(0), bars=None):
+    """Price one market `m1` on NVDA through the config's pricing steps."""
+    books = pd.DataFrame([{"cycle_id": CYCLE, "fetched_at_utc": NOW, "market_id": "m1",
+                           "ticker": "NVDA", "contract_type": contract_type,
+                           "end_date": pd.Timestamp(end_date, tz="UTC"), "period": period,
+                           "outcome_index": i, "side": "ask", "depth_rank": 0,
+                           "price": 0.5, "size": 100.0} for i in (0, 1)])
+    base = {"strike": None, "direction": None, "range_low": None, "range_high": None,
+            "outcome_0": "Yes", "outcome_1": "No", "event_slug": "nvda-up-or-down"}
+    if bars is not None:
+        monkeypatch.setattr(store, "session_bars_5m", lambda symbol: bars)
+    monkeypatch.setattr(store, "books", lambda cycle_id, types: books)
+    monkeypatch.setattr(store, "market_terms", lambda kind: pd.DataFrame(
+        [{"market_id": "m1", **base, **terms}]).set_index("market_id"))
+    monkeypatch.setattr(store, "option_chain", lambda cycle_id, symbols: (
+        calls() if chain is None else chain))
+    monkeypatch.setattr(store, "quote_times", lambda cycle_id: pd.Series(
+        {"NVDA": NOW - quote_age}, dtype="object"))
+    monkeypatch.setattr(store, "risk_free_rate", lambda when: RATE)
+    config = configs.load(config_name)
+    return price(Cycle(CYCLE, (contract_type,)), config).iloc[0]
+
+
 def test_close_above_weekly_is_the_call_spread(monkeypatch):
-    _, out = priced(monkeypatch, "poly-close-above-weekly-stock", "close_above", "weekly",
-                    {"strike": 104.0, "direction": "above"}, FRIDAY_END)
-    row = out.iloc[0]
+    row = priced(monkeypatch, "close_above_weekly", "close_above", "weekly",
+                 {"strike": 104.0, "direction": "above"}, FRIDAY_END)
     assert row["fair"] == pytest.approx(n_d2(104.0), abs=2e-3)
-    assert row["yes_direction"] == "up" and row["yes_vol"] is None
+    assert row["yes_direction"] == "up" and row["yes_vol"] is None and row["tradeable"]
 
 
 def test_close_below_is_the_complement(monkeypatch):
-    _, out = priced(monkeypatch, "poly-close-above-weekly-stock", "close_above", "weekly",
-                    {"strike": 96.0, "direction": "below"}, FRIDAY_END)
-    assert out.iloc[0]["fair"] == pytest.approx(1 - n_d2(96.0), abs=2e-3)
-    assert out.iloc[0]["yes_direction"] == "down"
+    row = priced(monkeypatch, "close_above_weekly", "close_above", "weekly",
+                 {"strike": 96.0, "direction": "below"}, FRIDAY_END)
+    assert row["fair"] == pytest.approx(1 - n_d2(96.0), abs=2e-3)
+    assert row["yes_direction"] == "down"
 
 
 def test_close_above_daily_uses_the_expiry_that_closes_that_day(monkeypatch):
     years = (pd.Timestamp("2026-09-16T20:00:00Z") - NOW).total_seconds() / (365 * 86400)
     chain = pd.concat([calls(pd.Timestamp("2026-09-16"), years=years), calls()])
-    _, out = priced(monkeypatch, "poly-close-above-daily-stock", "close_above", "daily",
-                    {"strike": 101.0, "direction": "above"}, "2026-09-16T23:59:59", chain)
-    assert out.iloc[0]["fair"] == pytest.approx(n_d2(101.0, years), abs=2e-3)
+    row = priced(monkeypatch, "close_above_daily", "close_above", "daily",
+                 {"strike": 101.0, "direction": "above"}, "2026-09-16T23:59:59", chain)
+    assert row["fair"] == pytest.approx(n_d2(101.0, years), abs=2e-3)
 
 
-def test_a_market_with_no_expiry_at_its_deadline_is_skipped_and_counted(monkeypatch):
-    bet_type, out = priced(monkeypatch, "poly-close-above-monthly-stock", "close_above",
-                           "monthly", {"strike": 104.0, "direction": "above"},
-                           "2026-09-30T23:59:59")
-    assert out.empty
-    assert bet_type.skipped == {"no expiry at the deadline": 1}
+def test_a_market_with_no_expiry_at_its_deadline_is_ruled_out_never_interpolated(monkeypatch):
+    row = priced(monkeypatch, "close_above_monthly", "close_above", "monthly",
+                 {"strike": 104.0, "direction": "above"}, "2026-09-30T23:59:59")
+    assert math.isnan(row["fair"]) and row["gate"] == "no expiry at the deadline"
 
 
 def test_range_is_the_difference_of_two_close_aboves(monkeypatch):
-    _, out = priced(monkeypatch, "poly-range-weekly-stock", "range", "weekly",
-                    {"range_low": 98.0, "range_high": 102.0}, FRIDAY_END)
-    row = out.iloc[0]
+    row = priced(monkeypatch, "range_weekly", "range", "weekly",
+                 {"range_low": 98.0, "range_high": 102.0}, FRIDAY_END)
     assert row["fair"] == pytest.approx(n_d2(98.0) - n_d2(102.0), abs=3e-3)
     assert row["yes_direction"] is None
 
 
 def test_an_open_ended_range_leans_one_way(monkeypatch):
-    _, out = priced(monkeypatch, "poly-range-weekly-stock", "range", "weekly",
-                    {"range_low": float("nan"), "range_high": 102.0}, FRIDAY_END)
-    assert out.iloc[0]["fair"] == pytest.approx(1 - n_d2(102.0), abs=2e-3)
-    assert out.iloc[0]["yes_direction"] == "down"
-
-
-def up_down_bars():
-    return pd.DataFrame({"symbol": "NVDA",
-                         "bar_time": pd.to_datetime(["2026-09-15T19:55:00Z",
-                                                     "2026-09-16T13:30:00Z"], utc=True),
-                         "open": [98.5, 200.0], "close": [99.0, 201.0]})
+    row = priced(monkeypatch, "range_weekly", "range", "weekly",
+                 {"range_low": float("nan"), "range_high": 102.0}, FRIDAY_END)
+    assert row["fair"] == pytest.approx(1 - n_d2(102.0), abs=2e-3)
+    assert row["yes_direction"] == "down"
 
 
 def test_up_down_strikes_at_the_previous_close(monkeypatch):
+    """Up if today's close beats the previous trading day's close (98.7% of 760
+    resolved markets; today's open 74%)."""
     years = (pd.Timestamp("2026-09-16T20:00:00Z") - NOW).total_seconds() / (365 * 86400)
     chain = calls(pd.Timestamp("2026-09-16"), years=years)
-    monkeypatch.setattr(data, "session_bars_5m", lambda symbol: up_down_bars())
-    _, out = priced(monkeypatch, "poly-up-down-daily-stock", "up_down", "daily",
-                    {"outcome_0": "Up", "outcome_1": "Down"}, "2026-09-16T23:59:59", chain)
-    assert out.iloc[0]["fair"] == pytest.approx(n_d2(99.0, years), abs=2e-3)
-    assert out.iloc[0]["yes_direction"] == "up"
+    row = priced(monkeypatch, "up_down_daily", "up_down", "daily",
+                 {"outcome_0": "Up", "outcome_1": "Down"}, "2026-09-16T23:59:59", chain,
+                 bars=up_down_bars())
+    assert row["fair"] == pytest.approx(n_d2(99.0, years), abs=2e-3)
+    assert row["yes_direction"] == "up"
 
 
-def test_an_opens_up_or_down_market_is_skipped_and_counted(monkeypatch):
+def test_an_opens_up_or_down_market_is_ruled_out(monkeypatch):
     years = (pd.Timestamp("2026-09-16T20:00:00Z") - NOW).total_seconds() / (365 * 86400)
-    chain = calls(pd.Timestamp("2026-09-16"), years=years)
-    monkeypatch.setattr(data, "session_bars_5m", lambda symbol: up_down_bars())
-    bet_type, out = priced(monkeypatch, "poly-up-down-daily-stock", "up_down", "daily",
-                           {"outcome_0": "Up", "outcome_1": "Down",
-                            "event_slug": "spx-opens-up-or-down-on-september-16-2026"},
-                           "2026-09-16T23:59:59", chain)
-    assert out.empty
-    assert bet_type.skipped == {"decided at the open, not the close": 1}
+    row = priced(monkeypatch, "up_down_daily", "up_down", "daily",
+                 {"outcome_0": "Up", "outcome_1": "Down",
+                  "event_slug": "spx-opens-up-or-down-on-september-16-2026"},
+                 "2026-09-16T23:59:59", calls(pd.Timestamp("2026-09-16"), years=years),
+                 bars=up_down_bars())
+    assert row["gate"] == "decided at the open, not the close"
+
+
+def test_a_quote_newer_than_the_book_is_not_priced(monkeypatch):
+    row = priced(monkeypatch, "close_above_weekly", "close_above", "weekly",
+                 {"strike": 104.0}, FRIDAY_END, quote_age=-pd.Timedelta(minutes=5))
+    assert row["gate"] == "option quote newer than the book"
 
 
 def test_an_up_down_market_settles_on_its_label(monkeypatch):
-    bet_type = run.discover_types()["poly-up-down-daily-stock"]()
-    bet_type._terms = pd.DataFrame([{"market_id": "m1", "outcome_0": "Up", "outcome_1": "Down"},
-                                    {"market_id": "m2", "outcome_0": "Up", "outcome_1": "Down"}]
-                                   ).set_index("market_id")
-    monkeypatch.setattr(data, "resolutions_upto", lambda when: pd.DataFrame(
+    monkeypatch.setattr(store, "outcome_labels", lambda: pd.DataFrame(
+        {"outcome_0": ["Up", "Up"], "outcome_1": ["Down", "Down"]}, index=["m1", "m2"]))
+    monkeypatch.setattr(store, "resolutions_upto", lambda when: pd.DataFrame(
         {"market_id": ["m1", "m2"], "result": ["Up", "Down"], "outcome_prices": [None, None],
          "settled_at_utc": [NOW, NOW]}))
-    assert list(bet_type.resolutions(NOW)["result"]) == ["Yes", "No"]
+    assert list(settle.resolutions(NOW)["result"]) == ["Yes", "No"]
 
 
 def test_a_stale_chain_is_no_chain(monkeypatch):
-    bet_type = run.discover_types()["poly-close-above-weekly-stock"]()
-    wire(monkeypatch, bet_type, "close_above", "weekly", {"strike": 104.0}, FRIDAY_END)
-    monkeypatch.setattr(data, "quote_times", lambda cycle_id: pd.Series(
-        {"NVDA": NOW - pd.Timedelta(hours=2)}, dtype="object"))
-    assert bet_type.priced(CYCLE).empty
-    assert bet_type.skipped == {"no fresh option chain": 1}
-
-
-def test_a_skipped_market_is_counted_once_however_many_cycles_skip_it(monkeypatch):
-    bet_type, _ = priced(monkeypatch, "poly-close-above-monthly-stock", "close_above",
-                         "monthly", {"strike": 104.0, "direction": "above"},
-                         "2026-09-30T23:59:59")
-    bet_type._books = None
-    bet_type.priced(CYCLE)
-    assert bet_type.skipped == {"no expiry at the deadline": 1}
+    row = priced(monkeypatch, "close_above_weekly", "close_above", "weekly",
+                 {"strike": 104.0}, FRIDAY_END, quote_age=pd.Timedelta(hours=2))
+    assert row["gate"] == "no fresh option chain"

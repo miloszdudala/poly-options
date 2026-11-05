@@ -1,0 +1,13 @@
+# Extension: Kalshi daily NDX markets (KXNASDAQ100 range at the close, KXNASDAQ100U
+# above/below at a time), priced from the NDX out-of-the-money option spread
+# at the expiry closing at the market's observation time. Kalshi books are
+# collected hourly and option prices are 15 minutes delayed: that matters most
+# for markets observed at an hour (they are ruled out by the expiry rule).
+extends: mvp
+venue: {use: kalshi, series: [KXNASDAQ100, KXNASDAQ100U]}
+markets: {use: kalshi_index, underlying: NDX, period: daily}
+inputs: {use: chain}
+vol: {use: none}
+prob: {use: call_spread, stale_chain_s: 1800}
+gates: {use: standard, drop: [no_fair]}
+fee: {use: kalshi, rate: 0.07}

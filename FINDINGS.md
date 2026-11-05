@@ -71,7 +71,7 @@ P(touch) = N((mT - b)/(sigma*sqrt(T))) + exp(2mb/sigma^2) * N((-b - mT)/(sigma*s
 
 At zero drift this is ~ `2 x digital`, which gives a model-free cross-check
 straight off a call spread. (An option spread now prices the
-close-above, up/down, range and Kalshi types, `model/types/_chain.py`.)
+close-above, up/down, range and Kalshi extensions, `pipeline/prob.py` `call_spread`.)
 
 ### The method that does NOT work — do not repeat this
 

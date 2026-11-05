@@ -96,5 +96,5 @@ def test_deadline_close_is_nat_before_the_calendar_starts():
     ("20261102T211500Z-x", False),
 ])
 def test_in_session_follows_new_york_time_across_the_dst_change(cycle_id, expected):
-    import data
-    assert data.in_session(cycle_id) is expected
+    import store
+    assert store.in_session(cycle_id) is expected

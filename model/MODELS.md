@@ -4,42 +4,41 @@ What every model shares (the fair values, the fills, the accounting, the
 data) is in `INSIGHTS.md` §1–4 and §6. Code comments citing "MODELS §3.x" or
 "MODELS 4.x" mean those sections there.
 
-## The formats
+## How a bet is decided
 
-- **A model** is one file in `model/models/` (`models/base.py` has the
-  format). It declares a `bar` and writes `decide(offers, book)`: `offers` is
-  every bet of one type that clears the bar this cycle, best return first;
-  `book` is what it holds (open and settled, dollars per direction and per
-  vol, the cash its account allows). It returns orders. It never knows its
-  account or where the data comes from.
-- **A type** is one file in `model/types/` (`bet_types.py` has the format):
-  which markets belong to it, how to price one, its fee, its period.
-- **Accounts** belong to the harness (`sim.py`): `max` (no ceiling, the
-  routine one), `compound` (`--start`, default $100, reinvests what comes
-  back) and `budget` (`--per-period` per day, week or month of the type; no
-  roll-over). Each model × type × account is its own replay.
-- **The bar** (`models.TODAYS_BAR`): EV ≥ 3¢ and return ≥ 8%; above a 90¢
-  ask, return ≥ 2%; every YES charged a 2¢ risk premium first. Open in
-  `CLAUDE.md`: only the premium is approved (2026-10-09). Each model declares
-  its bar.
-- **Run:** `model/run.py` (any model × type × account × dates; prints, writes
-  only with `--save`), `model/run_all.py` (every model on every type under
-  `max`, saved), `model/daily.py`, `model/dashboard.py`.
+A pipeline of steps, one module each in `model/pipeline/` (the table is in
+`pipeline/__init__.py`; every choice and its status in `DECISIONS.md`):
+markets → inputs → vol → prob → gates (the price of every market of a cycle,
+cached) → fee → bar → sizing (the model) → fills → account → settle. Each
+step has named variants; a config in `model/configs/` picks one per step.
 
-## Types
+- **The MVP** (`configs/mvp.yaml`): Polymarket weekly hit markets on stocks,
+  ATM vol of the first expiry at or after the deadline, regular-hours touch
+  probability,
+  today's bar, `edge_taker`, account `max`.
+- **The control** (`configs/control.yaml`): the MVP's markets, no bar,
+  `random_control`.
+- **Extensions** (`configs/extensions/`), each a few lines saying what it
+  changes in the MVP:
 
-| type | markets | priced by |
+| config | markets | priced by |
 |---|---|---|
-| `poly-hit-weekly-stock`, `poly-hit-monthly-stock` | Polymarket "hit $B" on stocks | regular-hours touch probability, ATM vol of the first expiry at or after the deadline (`engine.py`) |
-| `poly-close-above-{daily,weekly,monthly}-stock` | "close above $K" | out-of-the-money option spread at the expiry equal to the deadline |
-| `poly-up-down-daily-stock` | "Up or Down"; strike = the previous trading day's close; "Opens Up or Down" skipped | out-of-the-money option spread at that day's expiry |
-| `poly-range-weekly-stock` | "close at $L–$H" | difference of two call-spread close-aboves |
-| `kalshi-index-daily-sp500`, `kalshi-index-daily-ndx` | Kalshi KXINX/KXINXU, KXNASDAQ100/KXNASDAQ100U | SPX / NDX out-of-the-money option spread at the expiry equal to the observation time |
-| `poly-hit-monthly-wti` | Polymarket "WTI hit $B" | one-touch with USO vol at the same moneyness × the WTI/USO vol ratio, on the contract Active at the deadline |
+| `hit_monthly` | Polymarket monthly "hit $B" on stocks | as the MVP |
+| `close_above_{daily,weekly,monthly}` | "close above $K" | `prob: call_spread`, out-of-the-money option spread at the expiry equal to the deadline |
+| `up_down_daily` | "Up or Down"; strike = the previous trading day's close; "Opens Up or Down" ruled out | the same spread at that day's expiry |
+| `range_weekly` | "close at $L–$H" | difference of two close-aboves |
+| `kalshi_sp500_daily`, `kalshi_ndx_daily` | Kalshi KXINX/KXINXU, KXNASDAQ100/KXNASDAQ100U (`venue: kalshi`) | SPX / NDX out-of-the-money spread at the expiry closing at the market's observation time |
+| `wti_monthly` | Polymarket "WTI hit $B" | one-touch with USO vol at the same moneyness × the WTI/USO vol ratio, on the contract Active at the deadline; prices nothing until the ratio is set |
 
-A market whose deadline has no matching expiry is skipped and counted, never
-interpolated. The WTI type prices nothing until the WTI/USO vol ratio is set
-(`model/types/_wti.py`) and the collector stores the next contract's price.
+A market whose deadline has no matching expiry is ruled out (gate "no expiry
+at the deadline"), never interpolated. Per CLAUDE.md (Focus), only the MVP
+is being developed; the extensions are kept, not trusted.
+
+**Accounts** (step 10): `max` (routine), `compound` (`start`, default $100,
+reinvests), `budget` (`per_period` per day, week or month; no roll-over).
+**Run:** `model/run.py` (default: replay `mvp` and `control` over every date;
+`--save` writes ledgers and reports), `run.py daily`, `run.py lab`,
+`run.py dashboard`.
 
 ## Models
 
@@ -60,7 +59,7 @@ and nothing here has shown an edge (INSIGHTS §4.5).
 ### Hedged books
 
 Two hedged books (direction; direction and vol) are the user's to design and
-will be written as model files. Their predecessors, `direction_balanced` and
+will be written as sizing variants in `pipeline/sizing.py`. Their predecessors, `direction_balanced` and
 `scenario_hedged`, were deleted on 2026-11-04 (git history has them), as were
 `factor_neutral`, `balanced_book` and `empirical_longshot` on 2026-10-17.
 
@@ -74,7 +73,7 @@ will be written as model files. Their predecessors, `direction_balanced` and
 
 ## Results so far (historical, under code that no longer exists)
 
-The numbers below come from the `run_all.py` run of 2026-10-09, under the
+The numbers below come from the run of 2026-10-09, under the
 pricing and accounts before the 2026-11-04 refactor: `min(fair_K, fair_atm)` for YES and `max` for NO, a $10,000 bankroll
 with $150 YES / $500 NO per-market caps, and an optimistic / confirmed split
 of fills. They cannot be reproduced with the current code (git history can),

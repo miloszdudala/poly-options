@@ -84,7 +84,7 @@ one place): EV ≥ 3¢ and ROI ≥ 8%; above a 90¢ ask, ROI ≥ 2%; every YES c
 a 2¢ risk premium first (§7.2). Open in `CLAUDE.md`: only the premium is
 approved. There are no per-market caps (`CLAUDE.md`, Decided: max bets).
 
-## 3. Fair values (`model/engine.py`, `model/fair.py`, `model/types/`)
+## 3. Fair values (`model/pipeline/`: markets, inputs, vol, prob, gates)
 
 Every model reads the same fair for a market; models differ in what they buy
 and how much.
@@ -124,7 +124,7 @@ and how much.
 
 ### 3.3 Touch probability (Decided)
 
-`fair = touch_probability(S_book, B, T_sessions, sigma_atm, r, f)`. The venue
+`fair = maths.touch_probability(S_book, B, T_sessions, sigma_atm, r, f)`. The venue
 watches regular-hours candles only: a move beyond the barrier that reverses
 overnight does not count, an open beyond it does. So each session is an
 unwatched overnight gap carrying `1-f` of the day's variance, then a watched
@@ -137,6 +137,8 @@ regular hours + ATM Brier 0.0788, regular hours + barrier-strike vol 0.0792,
 continuous + ATM 0.0799, continuous + barrier-strike vol 0.0811. Against the
 continuous formula it lowers fair by a median 0.5¢ (p90 3.9¢). Moving `f` from
 0.5 to 0.75 moves fair by a median 0.4¢ (p90 3.3¢).
+The variant is `prob: regular_hours` (`pipeline/prob.py`); `one_touch`, the
+continuous formula, stays as the comparison (`lab score`).
 
 ### 3.4 Reliability flags carried on every hit fair
 
@@ -156,12 +158,12 @@ continuous formula it lowers fair by a median 0.5¢ (p90 3.9¢). Moving `f` from
 
 `P(S_T > K) = e^{rT} (C(K1) − C(K2)) / (K2 − K1)`, the call spread around `K`,
 or from the put spread below the money, at the expiry whose close is exactly the
-deadline (`model/types/_chain.py`).
+deadline (`prob.call_spread`).
 No exact expiry: the market is skipped and counted. On a flat-vol chain this
 is `N(d2)`; with strikes wide against the move to expiry it carries
-discretisation error. WTI hit markets: `model/types/_wti.py`.
+discretisation error. WTI hit markets: parked (`DECISIONS.md`).
 
-## 4. Shared execution and accounting (`model/sim.py`, `model/results.py`)
+## 4. Shared execution and accounting (`model/replay.py`, `pipeline/` fee to settle, `reporting/results.py`)
 
 ### 4.1 Replay
 
@@ -345,7 +347,7 @@ not matter to a fund.
   *(unapproved; the approved rule charges every YES, hedges included)*.
 
 **Built 2026-10-09**, now `TODAYS_BAR.yes_premium = 0.02` in
-`models/base.py`, charged to every YES under today's bar. Effect on September
+`configs/mvp.yaml`, charged to every YES under today's bar. Effect on September
 under the code of the time: optimistic PnL up in every option model,
 confirmed PnL down by $150–200 per model, because of a few confirmed YES
 winners. Too few to read either way.

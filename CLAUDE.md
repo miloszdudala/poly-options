@@ -81,11 +81,15 @@ believable yet: leave them out of a cleanup's reasoning, delete only on request.
 
 ## Formats
 
-A new model or a new type of bet is one new file, and no other file changes.
-A model (`model/models/`) receives this cycle's offers and what it holds, and
-returns orders. It does not know its account or where data comes from. A type
-(`model/types/`) says which markets belong to it, how to price one and its fee.
-Accounts belong to the harness. `PLAN.md` T3 has the details.
+Three parts: the collector (`data/`), the decision pipeline (`model/pipeline/`)
+and reporting (`model/reporting/`). The pipeline is one module per decision
+step (markets, inputs, vol, prob, gates, fee, bar, sizing, fills, account,
+settle); each step has named variants, and a config (`model/configs/*.yaml`)
+picks one variant per step. The MVP is `configs/mvp.yaml`; every other config
+`extends` it and changes a step or two (`configs/extensions/`). A new model,
+type or way of making a decision is a new variant in its step's module and,
+if it should run routinely, a few lines of config. `model/DECISIONS.md` lists
+every choice and whether it is decided, open or a guess.
 
 ## Open (do not decide these)
 
@@ -102,18 +106,23 @@ Accounts belong to the harness. `PLAN.md` T3 has the details.
 
 - `data/` - collector. `data/src/jobs.py discover | snapshot | daily`. Writes
   `data/store/` (Parquet, ~2 GB, **not in git**).
-- `model/` - pricing (`engine.py`, `fair.py`), simulation (`sim.py`), models
-  (`models/`), reports. `model/run_all.py` runs every model; writes
-  `model/store/` (not in git) and `model/reports/`.
+- `model/` - `store.py` (the one door to the Parquet store, or to a sample of
+  it), `pipeline/` (the decision steps), `configs/`, `replay.py` (runs a
+  config over dates), `lab.py` (score or sweep one step on a sample),
+  `sample.py` / `synthetic.py` (small stores), `reporting/`, `daily.py`.
+  `model/run.py` is the one command; it writes `model/store/` (ledgers and
+  the pricing cache, not in git) and `model/reports/`.
 - `scheduling/` - launchd jobs for the collector and the daily report.
 
 ## Commands
 
 ```bash
 .venv/bin/python -m pytest data/tests model/tests -q
-.venv/bin/python model/run_all.py --dates 2026-09-16,... --tag name
+.venv/bin/python model/run.py --dates 2026-09-16,... --save --tag name   # mvp + control
+.venv/bin/python model/run.py --store model/samples/x lab score --vary vol.use=...
 ```
 
 Tests that read the store skip when it is absent (as in a cloud session).
-A cloud session therefore cannot run the simulation; any task whose "done
-when" needs real results is checked locally before merging.
+The pipeline tests run end to end on the synthetic store (`synthetic.py`),
+which pins the replay results; real results are still checked locally before
+merging.

@@ -1,150 +1,135 @@
-"""Run any model x type x account over any dates.
+"""The one command for `model/`.
 
-    .venv/bin/python model/run.py --model edge_taker --type poly-hit-weekly-stock \\
-        --account compound --start 100 --from 2026-10-01 --to 2026-10-31
+    run.py [--store PATH] [replay] [--config mvp] [--set step.key=value] [--from D] [--to D] [--save]
+    run.py daily                 # replay the routine configs on every date, write the daily report
+    run.py lab inspect|score|sweep ...
+    run.py sample --from D --to D --tickers T,... --out DIR  |  --synthetic --out DIR
+    run.py dashboard
+    run.py review
 
-Defaults: every model, every type, account `max`, every date. Prints a short
-result per model x type (bets, money in, promised EV, PnL, PnL by period) and
-writes nothing unless `--save`. `run_all.py` and `daily.py` go through
-`run_matrix` here.
-
-Models are the classes in `model/models/*.py`, types the classes in
-`model/types/*.py`; both are found by looking, so adding one is adding a file.
+`replay` (the default) runs each `--config` (default: the routine ones,
+`mvp` and `control`) over the dates and prints bets, money in, promised EV
+and PnL by period; `--save` writes ledgers, reports and the combined report.
+`--store` reads a sample or the synthetic store instead of the full one.
+Configs live in `model/configs/`; `--set` changes one setting for one run.
 """
 from __future__ import annotations
 
 import argparse
-import datetime as dt
-import importlib.util
-import inspect
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.append(str(HERE.parent / "data" / "src"))   # see model/data.py
+sys.path.append(str(HERE.parent / "data" / "src"))   # see store.py
 
-import bet_types  # noqa: E402
-import data  # noqa: E402
-import results  # noqa: E402
-import sim  # noqa: E402
-from models import Model  # noqa: E402
+import store  # noqa: E402
+import pipeline  # noqa: E402,F401  (registers the step variants)
+import replay  # noqa: E402
+from pipeline import config as configs  # noqa: E402
+from reporting import results  # noqa: E402
 
-MODELS = HERE / "models"
-TYPES = HERE / "types"
-SKIP_FILES = {"__init__", "base"}
-
-
-def _classes(folder: Path, base: type) -> dict[str, type]:
-    """Every subclass of `base` with a `name`, defined in a file of `folder`.
-
-    Loaded by path: `model/types` cannot be a package, because `model/` is on
-    `sys.path` and a package called `types` would shadow the standard library.
-    The folder goes on `sys.path` so a file can import its `_helper` siblings.
-    """
-    if str(folder) not in sys.path:
-        sys.path.append(str(folder))
-    found: dict[str, type] = {}
-    for path in sorted(folder.glob("*.py")):
-        if path.stem.startswith("_") or path.stem in SKIP_FILES:
-            continue
-        module_name = f"_{folder.name}_{path.stem}"
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        for obj in vars(module).values():
-            if (inspect.isclass(obj) and issubclass(obj, base) and obj is not base
-                    and obj.__module__ == module_name and getattr(obj, "name", "")):
-                if obj.name in found:
-                    raise ValueError(f"two classes are called {obj.name!r}")
-                found[obj.name] = obj
-    return found
-
-
-def discover_models(folder: Path = MODELS) -> dict[str, type]:
-    return _classes(folder, Model)
-
-
-def discover_types(folder: Path = TYPES) -> dict[str, type]:
-    return _classes(folder, bet_types.Type)
+ROUTINE = ["mvp", "control"]
 
 
 def date_range(start: str | None, end: str | None) -> list[str]:
-    """Every calendar date from `start` to `end`; a type replays only the
-    cycles it has. Default: the first priced date to today."""
-    if start is None:
-        priced = data.fair_dates()
-        start = priced[0] if priced else dt.date.today().isoformat()
-    end = end or dt.date.today().isoformat()
-    first, last = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
-    return [(first + dt.timedelta(days=i)).isoformat() for i in range((last - first).days + 1)]
+    """Every store date from `start` to `end` (default: all of them)."""
+    dates = store.dates()
+    return [d for d in dates if (not start or d >= start) and (not end or d <= end)]
 
 
-def run_matrix(dates: list[str], models: list[str] | None = None,
-               types: list[str] | None = None, account: str = "max",
-               start: float = 100.0, per_period: float | None = None,
-               save: bool = False, tag: str = "", echo=None,
-               model_classes: dict | None = None,
-               type_classes: dict | None = None) -> list[tuple[sim.Result, dict]]:
-    """Each model x type, separately, under a fresh account of its own."""
-    model_classes = model_classes or discover_models()
-    type_classes = type_classes or discover_types()
-    for wanted, known, what in ((models, model_classes, "model"), (types, type_classes, "type")):
-        unknown = sorted(set(wanted or []) - set(known))
-        if unknown:
-            raise SystemExit(f"unknown {what}: {', '.join(unknown)}; "
-                             f"known: {', '.join(sorted(known))}")
+def run_configs(names: list[str], dates: list[str], overrides: list[str] | None = None,
+                save: bool = False, tag: str = "", use_cache: bool = True,
+                echo=None) -> list[tuple[replay.Result, dict]]:
     out = []
-    for model_name in models or sorted(model_classes):
-        for type_name in types or sorted(type_classes):
-            result = sim.run(model_classes[model_name](), type_classes[type_name](),
-                             sim.make_account(account, start, per_period), dates)
-            m = results.summary(result)
-            if save:
-                results.write_run(result, tag, m)
-            out.append((result, m))
-            if echo:
-                echo(f"  {model_name:<16} {type_name:<26} {m['bets']:5,} bets  "
-                     f"${m['money_in']:10,.0f} in  {m['seconds']:6.1f}s")
+    for name in names:
+        result = replay.run(configs.load(name, overrides), dates, use_cache=use_cache)
+        m = results.summary(result)
+        if save:
+            results.write_run(result, tag, m)
+        out.append((result, m))
+        if echo:
+            echo(f"  {result.name:<28} {m['bets']:5,} bets  ${m['money_in']:10,.0f} in  "
+                 f"{m['seconds']:6.1f}s")
     return out
 
 
-def short_report(result: sim.Result, m: dict) -> str:
-    lines = [f"{m['model']} on {m['type']} ({m['account']}): {m['bets']:,} bets, "
+def short_report(result: replay.Result, m: dict) -> str:
+    lines = [f"{m['type']} ({m['model']}, {m['account']}): {m['bets']:,} bets, "
              f"${m['money_in']:,.2f} in, promised EV ${m['promised_ev']:,.2f}; "
              f"{m['settled']:,} settled: PnL ${m['pnl']:,.2f} against "
              f"${m['settled_promised_ev']:,.2f} promised"]
-    table = results.by_period(result)
-    for period, row in table.iterrows():
+    for period, row in results.by_period(result).iterrows():
         lines.append(f"  {result.period} {period}: {int(row['bets']):4,} bets  "
                      f"${row['money_in']:9,.2f} in  promised ${row['promised_ev']:8,.2f}  "
                      f"PnL ${row['pnl']:9,.2f} on {int(row['settled']):,} settled")
+    if m["skipped"]:
+        lines.append("  ruled out: " + ", ".join(f"{k} {v:,}" for k, v in m["skipped"].items()))
     return "\n".join(lines)
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__,
+def replay_main(argv) -> int:
+    parser = argparse.ArgumentParser(prog="run.py", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--model", action="append", help="repeatable; default every model")
-    parser.add_argument("--type", action="append", help="repeatable; default every type")
-    parser.add_argument("--account", default="max", choices=["max", "compound", "budget"])
-    parser.add_argument("--start", type=float, default=100.0,
-                        help="starting cash of the compound account (default 100)")
-    parser.add_argument("--per-period", type=float,
-                        help="dollars per period of the budget account")
-    parser.add_argument("--from", dest="start_date", help="first date, YYYY-MM-DD")
-    parser.add_argument("--to", dest="end_date", help="last date, YYYY-MM-DD")
+    parser.add_argument("--config", action="append", help="repeatable; default mvp and control")
+    parser.add_argument("--set", dest="overrides", action="append", default=[])
+    parser.add_argument("--from", dest="start")
+    parser.add_argument("--to", dest="end")
+    parser.add_argument("--dates", help="comma-separated, instead of --from/--to")
     parser.add_argument("--save", action="store_true", help="write ledgers and reports")
     parser.add_argument("--tag", default="", help="suffix for saved ledger and report names")
+    parser.add_argument("--no-cache", action="store_true", help="reprice instead of reading the cache")
     args = parser.parse_args(argv)
-
-    dates = date_range(args.start_date, args.end_date)
-    runs = run_matrix(dates, args.model, args.type, args.account, args.start,
-                      args.per_period, save=args.save, tag=args.tag)
+    dates = sorted(args.dates.split(",")) if args.dates else date_range(args.start, args.end)
+    if not dates:
+        print("No dates with books in the store.", file=sys.stderr)
+        return 1
+    started = time.time()
+    runs = run_configs(args.config or ROUTINE, dates, args.overrides, args.save, args.tag,
+                       not args.no_cache, echo=lambda line: print(line, file=sys.stderr))
     for result, m in runs:
         print(short_report(result, m))
+    if args.save:
+        import lab
+
+        rows = [m for _, m in runs]
+        scores, sample = lab.brier(runs[0][0].config, dates)
+        text = results.combined_report(rows, scores, sample, dates, time.time() - started)
+        suffix = f"_{args.tag}" if args.tag else ""
+        out = results.REPORTS / f"all_{dates[0]}_{dates[-1]}{suffix}.md"
+        results.REPORTS.mkdir(parents=True, exist_ok=True)
+        out.write_text(text)
+        print(f"  wrote {out}", file=sys.stderr)
     return 0
+
+
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) >= 2 and argv[0] == "--store":
+        store.use(argv[1])
+        argv = argv[2:]
+    command = argv[0] if argv and not argv[0].startswith("-") else "replay"
+    rest = argv[1:] if argv and argv[0] == command else argv
+    if command == "replay":
+        return replay_main(rest)
+    if command == "lab":
+        import lab
+        return lab.main(rest)
+    if command == "sample":
+        import sample
+        return sample.main(rest)
+    if command == "daily":
+        import daily
+        return daily.main(rest)
+    if command == "dashboard":
+        from reporting import dashboard
+        return dashboard.main(rest)
+    if command == "review":
+        from reporting import review
+        return review.main(rest)
+    print(f"unknown command {command!r}", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

@@ -100,7 +100,7 @@ pre.mermaid { background: var(--panel); border: 1px solid var(--rule); border-ra
 </nav>
 
 <main>
-<div class="eyebrow">poly-options · model/models · revised 2026-11-04</div>
+<div class="eyebrow">poly-options · model/pipeline · revised 2026-11-05</div>
 <h1>How the models bet</h1>
 <p class="lede">Every model looks at the same priced markets of one type each cycle and decides which bets to buy, from offers that already clear its bar. This page explains the rule a bet is judged by and lets you try it on your own numbers. The calculator runs the same arithmetic as <code>models/base.py</code>.</p>
 
@@ -116,7 +116,7 @@ pre.mermaid { background: var(--panel); border: 1px solid var(--rule); border-ra
 </table></div>
 
 <div class="rule-box">
-<b>How a bet is judged</b> <span class="file">models/base.py · Bar, Bet</span>
+<b>How a bet is judged</b> <span class="file">pipeline/offers.py · Bar, Bet</span>
 <ul>
 <li><b>cost</b> = best ask + Polymarket's fee, <span class="mono">0.04 × price × (1 − price)</span> per share.</li>
 <li><b>value</b> = the win probability, minus a 2¢ risk premium on a YES (approved 2026-10-09; INSIGHTS §7.2).</li>
@@ -145,7 +145,7 @@ pre.mermaid { background: var(--panel); border: 1px solid var(--rule); border-ra
 
 <!-- ============================================================ 2 -->
 <h2 id="cycle">2. One cycle</h2>
-<p>Each cycle the harness (<code>sim.py</code>) builds the <b>offers</b>, every bet of the type that clears the model's bar, best return first, each with <code>max_usd</code>, the most of the book that still clears the bar. It hands them to <code>model.decide(offers, book)</code> with the model's <b>book</b> (open and settled holdings, dollars per direction and per vol, the cash its account allows). The model returns orders.</p>
+<p>Each cycle the replay (<code>replay.py</code>) builds the <b>offers</b>, every bet of the type that clears the model's bar, best return first, each with <code>max_usd</code>, the most of the book that still clears the bar. It hands them to <code>model.decide(offers, book)</code> with the model's <b>book</b> (open and settled holdings, dollars per direction and per vol, the cash its account allows). The model returns orders.</p>
 <div class="rule-box"><ul>
 <li><b>Depth</b>: at most half of each price level, and only levels whose all-in cost is under the bet's limit.</li>
 <li><b>One entry per market</b>: a market already held, or held until it settled, is never offered again.</li>
@@ -173,18 +173,18 @@ pre.mermaid { background: var(--panel); border: 1px solid var(--rule); border-ra
 <h2 id="code">5. Where the code is</h2>
 <div class="scroll"><table>
 <tr><th>file</th><th>what it holds</th></tr>
-<tr><td class="mono">model/models/base.py</td><td>The model format: <code>Bar</code> and <code>TODAYS_BAR</code>, <code>Bet</code>, <code>Order</code>, <code>Holding</code>, <code>Book</code>, <code>Model</code>.</td></tr>
-<tr><td class="mono">model/models/*.py</td><td>One model per file, found by the harness.</td></tr>
-<tr><td class="mono">model/bet_types.py, model/types/*.py</td><td>The type format and one type per file: which markets, how to price one, the fee.</td></tr>
-<tr><td class="mono">model/sim.py</td><td>The harness: offers, filling against books, accounts, settlement.</td></tr>
-<tr><td class="mono">model/results.py</td><td>Promised EV against realised PnL, reports, ledgers.</td></tr>
-<tr><td class="mono">model/run.py</td><td>Any model × type × account × dates.</td></tr>
+<tr><td class="mono">model/pipeline/*.py</td><td>One module per decision step (markets, inputs, vol, prob, gates, fee and bar in <code>offers.py</code>, sizing, fills, accounts, settle), each with named variants.</td></tr>
+<tr><td class="mono">model/configs/*.yaml</td><td>One variant per step: <code>mvp.yaml</code>, <code>control.yaml</code>, and extensions.</td></tr>
+<tr><td class="mono">model/replay.py</td><td>Runs a config cycle by cycle: price, settle, offer, decide, fill.</td></tr>
+<tr><td class="mono">model/reporting/results.py</td><td>Promised EV against realised PnL, reports, ledgers.</td></tr>
+<tr><td class="mono">model/lab.py</td><td>Score or sweep one step on a sample.</td></tr>
+<tr><td class="mono">model/run.py</td><td>The one command.</td></tr>
 </table></div>
 </main>
 </div>
 
 <script>
-// The models' arithmetic, ported from model/models/*.py for the explainer.
+// The bar's arithmetic, ported from model/pipeline/offers.py for the explainer.
 // Every function names the Python it mirrors.
 
 // --- normal distribution (statistics.NormalDist in Python) ---
@@ -209,7 +209,7 @@ function Ninv(p) {                      // Acklam's inverse normal, |rel error| 
   return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
 }
 
-// --- models/base.py: Bar ---
+// --- pipeline/offers.py: Bar ---
 const YES_PREMIUM = 0.02, FEE = 0.04, DEAR = 0.90;
 const allInCost = ask => ask + FEE * ask * (1 - ask);
 function judge({ ask, winProb, side, minEv = 0.03, minRoi = 0.08 }) {
