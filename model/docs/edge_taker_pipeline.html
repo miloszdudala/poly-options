@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edge Taker Pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one vertical run of numbered steps, each line tagged by how sure it is, with a map on top. */
+:root {
+  --bg: #eef1f5; --panel: #ffffff; --fg: #161e2e; --muted: #566177; --line: #d3d9e3;
+  --fact: #17694e; --fact-bg: #dff2ea;
+  --book: #2359ab; --book-bg: #e1ebfa;
+  --meas: #6d3fae; --meas-bg: #eee6fa;
+  --judg: #9a4f00; --judg-bg: #fdecd6;
+  --neg: #b3261e;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "Source Sans 3", "Segoe UI", Arial, sans-serif;
+  --mono: "JetBrains Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11161f; --panel: #1a212d; --fg: #e8ecf3; --muted: #9ba6b9; --line: #303a4a;
+  --fact: #5fd0a8; --fact-bg: #17352c;
+  --book: #8db6f5; --book-bg: #1b2d48;
+  --meas: #c3a1f2; --meas-bg: #2d2342;
+  --judg: #f2b263; --judg-bg: #3b2a14;
+  --neg: #f2857d; color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #11161f; --panel: #1a212d; --fg: #e8ecf3; --muted: #9ba6b9; --line: #303a4a;
+  --fact: #5fd0a8; --fact-bg: #17352c;
+  --book: #8db6f5; --book-bg: #1b2d48;
+  --meas: #c3a1f2; --meas-bg: #2d2342;
+  --judg: #f2b263; --judg-bg: #3b2a14;
+  --neg: #f2857d; color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/1.5 var(--body); }
+.wrap { max-width: 1040px; margin: 0 auto; display: grid; gap: 32px;
+  padding-block: 32px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; }
+h1 { font-size: clamp(30px, 5vw, 44px); font-weight: 800; line-height: 1.08; letter-spacing: -0.01em; }
+h2 { font-size: 22px; font-weight: 800; }
+h3 { font-size: 18px; font-weight: 700; }
+p { margin: 0; max-width: 68ch; }
+.lede { font-size: 18px; color: var(--muted); margin-top: 10px; }
+.stack { display: grid; gap: 12px; min-width: 0; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.neg { color: var(--neg); }
+
+/* tags */
+.tag { font: 600 12px/1 var(--mono); padding: 5px 7px; border-radius: 3px; white-space: nowrap; display: inline-block; }
+.F { color: var(--fact); background: var(--fact-bg); }
+.T { color: var(--book); background: var(--book-bg); }
+.M { color: var(--meas); background: var(--meas-bg); }
+.J { color: var(--judg); background: var(--judg-bg); }
+
+/* legend and filter */
+.legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.legend button { all: unset; box-sizing: border-box; cursor: pointer; background: var(--panel);
+  border: 1px solid var(--line); padding: 12px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.legend button:focus-visible, .pill:focus-visible, .tile:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.legend button[aria-pressed="true"] { border-color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg); }
+.legend .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.legend .count { font: 600 20px/1 var(--mono); }
+.legend small { font-size: 14px; color: var(--muted); line-height: 1.35; }
+.hint { font-size: 14px; color: var(--muted); }
+
+/* premise */
+.premise { background: var(--judg-bg); padding: 16px; display: grid; gap: 6px; }
+.premise h2 { color: var(--judg); font-size: 19px; }
+
+/* map */
+.map { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.tile { text-decoration: none; color: inherit; background: var(--panel); border: 1px solid var(--line);
+  padding: 10px; display: grid; gap: 8px; align-content: space-between; min-height: 84px; }
+.tile:hover { border-color: var(--fg); }
+.tile b { font: 700 14px/1.2 var(--display); }
+.tile b span { color: var(--muted); font-family: var(--mono); font-weight: 600; margin-right: 4px; }
+.pips { display: flex; flex-wrap: wrap; gap: 3px; }
+.pip { width: 12px; height: 12px; border-radius: 2px; }
+.pip.F { background: var(--fact); } .pip.T { background: var(--book); }
+.pip.M { background: var(--meas); } .pip.J { background: var(--judg); }
+
+/* steps */
+.step { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 4px 12px; scroll-margin-top: 12px; }
+.step > .n { font: 800 34px/1 var(--display); color: var(--muted); }
+.step .body { background: var(--panel); border: 1px solid var(--line); padding: 16px; display: grid; gap: 10px; min-width: 0; }
+.step .sub { color: var(--muted); }
+.row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; padding-top: 10px; border-top: 1px solid var(--line); transition: opacity .15s; }
+.row p + p { color: var(--muted); font-size: 15px; }
+.row b { font-weight: 600; }
+.dim .row:not(.on) { opacity: .22; }
+@media (prefers-reduced-motion: reduce) { .row { transition: none; } }
+
+/* tables */
+.scroll { overflow-x: auto; min-width: 0; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; font-variant-numeric: tabular-nums; }
+th { font: 600 13px/1.2 var(--body); color: var(--muted); }
+th:first-child, td:first-child { text-align: left; white-space: normal; min-width: 130px; }
+td { font-family: var(--mono); font-size: 14px; }
+td:first-child { font-family: var(--body); font-size: 15px; }
+tr.total td { font-weight: 600; border-top: 2px solid var(--fg); }
+.panel { background: var(--panel); border: 1px solid var(--line); padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; }
+ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header class="stack">
+  <h1>How edge_taker decides a bet</h1>
+  <p class="lede">Polymarket "will this stock hit $B" markets, from raw data to settled money. Every line is tagged by how much rests on evidence and how much on someone's call.</p>
+</header>
+
+<section class="stack" aria-label="Confidence legend">
+  <div class="legend" id="legend"></div>
+  <p class="hint">Select a tag to highlight its lines below; select it again to clear. The ratings are Claude's assessment and you have not reviewed them (unapproved).</p>
+</section>
+
+<section class="premise">
+  <h2>The one assumption everything sits on</h2>
+  <p><b>Listed options price the event correctly, and any gap to Polymarket is Polymarket's error.</b> This is assumed, never tested, and project rules keep it out of scope. If options are systematically wrong in one direction, every "promised" figure below is wrong with them.</p>
+</section>
+
+<section class="stack" aria-label="Map of the pipeline">
+  <h2>The whole run at a glance</h2>
+  <div class="map" id="map"></div>
+</section>
+
+<section class="stack" id="steps" aria-label="Pipeline steps"></section>
+
+<section class="panel" id="example">
+  <h2>One real bet, end to end</h2>
+  <p>NO on "SPY hits $755 by Sep 25", bought 2026-09-21 at 09:45 New York time. These figures match the ledger to the cent.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Step</th><th>Calculation</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Inputs</td><td>spot $766.86, ATM vol 8.45%, 4.96 sessions left, f 0.656</td><td></td></tr>
+      <tr><td>Chance of a touch in regular hours</td><td>simulated (continuous formula: 17.41%)</td><td>15.52%</td></tr>
+      <tr><td>Chance NO wins</td><td>1 &minus; 15.52%</td><td>84.48%</td></tr>
+      <tr><td>Cost of best ask</td><td>$0.74 + fee 0.04 &times; 0.74 &times; 0.26</td><td>$0.7477</td></tr>
+      <tr><td>Bar check</td><td>EV 9.71c &ge; 3c, return 13.0% &ge; 8%</td><td>clears</td></tr>
+      <tr><td>Highest cost allowed</td><td>lower of 84.48c &minus; 3c and 84.48c &divide; 1.08</td><td>$0.7822</td></tr>
+      <tr><td>Level 1: 200 shares at $0.74</td><td>take half: 100 shares</td><td>$74.77</td></tr>
+      <tr><td>Level 2: 100 shares at $0.77</td><td>take half: 50 shares</td><td>$38.85</td></tr>
+      <tr><td>Level 3: $0.88</td><td>above the limit, stop</td><td></td></tr>
+      <tr><td>Position</td><td>150 shares, promised 84.48% &times; $150 &minus; $113.62</td><td>$13.10 EV</td></tr>
+      <tr class="total"><td>Settled: SPY never touched $755</td><td>$150 &minus; $113.62</td><td>+$36.38</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="panel" id="results">
+  <h2>What it produces</h2>
+  <p>Replay of 2026-09-16 to 10-30 with no bankroll limit, settled bets only. 59 monthly bets ($2,051) had not settled.</p>
+  <div class="scroll"><table>
+    <thead><tr><th></th><th>Bets</th><th>Money in</th><th>Promised</th><th>PnL</th><th>PnL &divide; promised</th></tr></thead>
+    <tbody>
+      <tr><td>Weekly</td><td>855</td><td>$100,113</td><td>$8,028</td><td>$5,384</td><td>0.67</td></tr>
+      <tr><td>Monthly</td><td>379</td><td>$23,759</td><td>$1,437</td><td>$3,322</td><td>2.31</td></tr>
+      <tr class="total"><td>Total</td><td>1,234</td><td>$123,871</td><td>$9,465</td><td>$8,707</td><td>0.92</td></tr>
+      <tr><td>of which NO</td><td>1,055</td><td>$119,375</td><td>$8,890</td><td>$8,924</td><td>1.00</td></tr>
+      <tr><td>of which YES</td><td>179</td><td>$4,496</td><td>$575</td><td class="neg">&minus;$217</td><td class="neg">&minus;0.38</td></tr>
+    </tbody>
+  </table></div>
+  <div class="cols">
+    <div class="stack">
+      <h3>Why not to lean on this yet</h3>
+      <ul>
+        <li>It is one six-week stretch, and 96% of the money was NO. A quiet market pays NO, so a calm window like this one likely flatters the strategy.</li>
+        <li>Bets with an Oct 30 deadline lost $794 on $26,036, the only losing deadline group.</li>
+        <li>$124k is the total the books would have allowed, not an account you could run. Your live test starts at $50-100.</li>
+      </ul>
+    </div>
+    <div class="stack">
+      <h3>What is not in the model</h3>
+      <ul>
+        <li>Polymarket's own price, as an input to fair value.</li>
+        <li>Past outcomes used as probabilities, fitted factors or machine learning.</li>
+        <li>News, order flow or any view on direction.</li>
+        <li>Selling before resolution, hedging or per-market limits.</li>
+        <li>The <span class="num">live/</span> trader, which still uses the old fee and old pricing.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+const LEVELS = {
+  F: ["Fact", "Read directly from the venue, the market's rules or a data feed."],
+  T: ["Textbook", "Standard finance maths. Correct if its inputs are."],
+  M: ["Measured", "Chosen by scoring against real outcomes. Could change with more data."],
+  J: ["Judgement", "An assumption or a number someone picked. This is the guessing."]
+};
+
+const STEPS = [
+  { name: "Find markets", sub: "Runs on every snapshot; a fuller walk runs once a session and once after the close.", rows: [
+    ["F", "Every open Polymarket event with a ticker and \"hit\" in its title.", "4,767 weekly and monthly markets on 21 stocks and indexes in the replay window."],
+    ["J", "Only stocks and indexes, weekly and monthly.", "Your scope choice. WTI, gold, silver and the dollar are left out."]
+  ]},
+  { name: "Snapshot data", sub: "Every 15 minutes during US regular hours.", rows: [
+    ["F", "Full order book for both the YES and NO token.", "Depth, not just the best price, because the bets walk down the book."],
+    ["F", "Option chains from Cboe, delayed 15 minutes.", "Median 880 seconds older than the book. Fair value is always this far behind."],
+    ["F", "Stock prices, 1-month T-bill rate, earnings dates and each market's fee schedule.", ""],
+    ["J", "5-minute bars from yfinance stand in for the venue's Pyth 1-minute candles.", "Used for spot and to spot barriers already touched. Assumes the two feeds agree closely."]
+  ]},
+  { name: "Drop unpriceable markets", sub: "450,720 market observations go in; 235,003 (52%) come out, across 3,677 markets.", rows: [
+    ["F", "Already touched: 8,508 dropped (1.9%).", "A printed barrier is a pending YES under the rules."],
+    ["J", "No usable option chain: 51,883 dropped (11.5%).", "Includes chains older than 30 minutes, which is what the first minutes of a session show. The 30 is a picked number."],
+    ["J", "Barrier more than 2.5 standard deviations away: 154,125 dropped (34.2%).", "The largest filter and a picked number. Far barriers are unreliable: one SPY barrier ranged from 0.2% to 14.7% depending on the vol input."],
+    ["J", "Earnings between the deadline and the expiry: 1,201 dropped (0.3%).", "That report inflates the vol but cannot cause a touch."]
+  ]},
+  { name: "Prepare inputs", sub: "Everything the price needs for one market.", rows: [
+    ["T", "Time left, counted in trading sessions to the last close at or before the deadline.", ""],
+    ["T", "Implied vol recomputed from option mids by inverting Black-Scholes.", "Checked against Cboe's own figure on liquid strikes."],
+    ["M", "Use at-the-money vol of the first expiry at or after the deadline.", "Brier 0.0788, against 0.0792 for the vol at the barrier's strike, on 9,272 finished-market observations."],
+    ["J", "When no expiry falls on the deadline, use the next one's vol unchanged.", "85% of priced observations match exactly; 15% borrow a later expiry."],
+    ["J", "One constant vol for the whole path.", "The formula's own assumption. Real vol changes, and options price barriers differently from at-the-money."],
+    ["J", "Earnings inside the window stay in the sample.", "36% of priced observations. The vol includes the report, but spread evenly rather than as one jump."],
+    ["J", "f: the share of a day's variance that arrives during the session.", "From the stock's past daily bars (0.52 to 0.75 for most). The only input options do not give, accepted 2026-11-05. Moving it from 0.5 to 0.75 shifts fair by up to 3.3c at the 90th percentile and changes bets from about 395 to 247 in a rough test."]
+  ]},
+  { name: "Price the touch", sub: "The chance the barrier prints before the deadline.", rows: [
+    ["F", "Only regular-hours prices count; an open beyond the barrier counts.", "Market rules: \"Prices occurring during pre-market or after-hours trading will not qualify.\""],
+    ["T", "20,000 simulated paths: overnight gap, then a watched session, with the exact crossing chance inside each session.", "Sampling noise is under about 0.4c."],
+    ["M", "Regular-hours version rather than the continuous formula.", "Brier 0.0788 against 0.0799. It lowers fair by a median 0.5c, up to 3.9c at the 90th percentile. A lower forecast also looks better in a calm window, so the rules are the stronger argument."],
+    ["J", "Prices move smoothly apart from overnight gaps, with no jumps during the session.", "Standard, and known to be imperfect."]
+  ]},
+  { name: "Compare with the book", sub: "Both sides of every market, treated equally apart from the premium.", rows: [
+    ["T", "YES wins with chance = fair. NO wins with chance = 1 − fair.", ""],
+    ["F", "Cost is the token's real best ask plus the venue fee.", "Fee is rate × p × (1 − p), 4% on most markets, read per market. A zero-fee holiday ran about Oct 20-30."],
+    ["J", "Every YES is charged 2c first.", "You approved this risk premium on 2026-10-09. It is a picked number."]
+  ]},
+  { name: "Clear the bar", sub: "Is the gap big enough to bother?", rows: [
+    ["J", "EV at least 3c a share and return at least 8%.", "Inherited, and still open in CLAUDE.md. Only the YES premium has been approved."],
+    ["J", "Above a 90c ask, return at least 2%.", "Also open."]
+  ]},
+  { name: "Size and fill", sub: "As large as the book allows while the bet still clears.", rows: [
+    ["F", "Walk down the real asks and stop at the first level whose all-in cost breaks the bar.", "Your decided account: no bankroll or per-market limit."],
+    ["J", "Take at most half of each level.", "The rest may be gone by the time an order lands. A picked number."],
+    ["M", "A fill counts if the book showed the size when we looked.", "A recheck about 40 seconds later found 80-88% of filled dollars still buyable."],
+    ["F", "Skip any fill under $1.", "Treated as the venue's minimum. live/ uses a 5-share minimum."]
+  ]},
+  { name: "Hold", sub: "No exits.", rows: [
+    ["M", "Hold to resolution, never sell.", "Polymarket spreads of about 7c eat any round trip."],
+    ["J", "One side of a market, bought once, never added to.", "Keeps the first look's price and passes on any better one later."]
+  ]},
+  { name: "Settle", sub: "The venue decides.", rows: [
+    ["F", "Pay $1, $0 or $0.50 a share from the venue's own result.", "A disputed market stays open rather than counting as a loss."]
+  ]},
+  { name: "Report", sub: "Is reality paying what was promised?", rows: [
+    ["T", "Each bet type gets its own book: EV promised at entry against realised PnL.", "This ratio is the main test of the assumption at the top of the page."]
+  ]}
+];
+
+const legend = document.getElementById("legend");
+const map = document.getElementById("map");
+const steps = document.getElementById("steps");
+const counts = { F: 0, T: 0, M: 0, J: 0 };
+
+STEPS.forEach((step, i) => {
+  const n = i + 1;
+  const section = document.createElement("article");
+  section.className = "step";
+  section.id = "step-" + n;
+  const rows = step.rows.map(([level, text, why]) => {
+    counts[level]++;
+    return `<div class="row" data-level="${level}"><span><span class="tag ${level}">${LEVELS[level][0]}</span></span>` +
+      `<div class="stack" style="gap:2px"><p><b>${text}</b></p>${why ? `<p>${why}</p>` : ""}</div></div>`;
+  }).join("");
+  section.innerHTML = `<div class="n" aria-hidden="true">${n}</div><div class="body"><div><h3>${step.name}</h3><p class="sub">${step.sub}</p></div>${rows}</div>`;
+  steps.appendChild(section);
+
+  const tile = document.createElement("a");
+  tile.className = "tile";
+  tile.href = "#step-" + n;
+  tile.innerHTML = `<b><span>${n}</span>${step.name}</b><span class="pips">` +
+    step.rows.map(([level]) => `<span class="pip ${level}" title="${LEVELS[level][0]}"></span>`).join("") + "</span>";
+  map.appendChild(tile);
+});
+
+Object.entries(LEVELS).forEach(([level, [label, text]]) => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.setAttribute("aria-pressed", "false");
+  button.dataset.level = level;
+  button.innerHTML = `<span class="top"><span class="tag ${level}">${label}</span><span class="count">${counts[level]}</span></span><small>${text}</small>`;
+  button.addEventListener("click", () => {
+    const turningOn = button.getAttribute("aria-pressed") !== "true";
+    legend.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", "false"));
+    button.setAttribute("aria-pressed", String(turningOn));
+    steps.classList.toggle("dim", turningOn);
+    steps.querySelectorAll(".row").forEach(r => r.classList.toggle("on", turningOn && r.dataset.level === level));
+  });
+  legend.appendChild(button);
+});
+</script>
+</body>
+</html>
