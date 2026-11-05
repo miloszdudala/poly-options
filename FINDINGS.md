@@ -48,7 +48,7 @@ The table is as of 2026-09-18. Holding to resolution has since become a rule
 
 ## 2. The method as first measured (2026-09-16)
 
-*Since decided (`CLAUDE.md`): the continuous one-touch below with the ATM vol
+*Since decided (`CLAUDE.md`): a regular-hours touch probability with the ATM vol
 of the first expiry at or after the deadline, one fair for both sides. Steps
 5 (two vols, positive under both) and the "1 - bid" NO price are not what the
 code does: the NO token's own ask is used.*
@@ -193,9 +193,8 @@ Median spreads now: hit ~7c, close_above ~19c. Hit markets are the live ones
 ## 5. Open questions
 
 1. **Regular-hours-only monitoring.** *Since measured and decided
-   (`CLAUDE.md`): a regular-hours correction moved fair by a median 1.4c and
-   did not improve the Brier score (0.0941 vs 0.0945), so the continuous
-   formula is used.* At the time: Polymarket resolves on Pyth 1-minute candles
+   (`CLAUDE.md`): on markets past their deadline the correction scores Brier
+   0.0788 against 0.0799 for the continuous formula, and it is used.* At the time: Polymarket resolves on Pyth 1-minute candles
    during regular hours only, so the true touch probability is lower than the
    continuous formula's.
 2. **Deep-OTM barriers are unreliable.** Feeding one smile point into a
@@ -244,7 +243,7 @@ Median spreads now: hit ~7c, close_above ~19c. Hit markets are the live ones
   `max(last_trade_time_utc)` per symbol per cycle. The 09-16 rows had it four
   hours late on top of that; repaired.
 - ~~Fair values must model regular-hours-only monitoring before any model
-  trades.~~ Built, measured, and not adopted: `model/INSIGHTS.md` §3.3.
+  trades.~~ Built and adopted: `model/INSIGHTS.md` §3.3.
 - **Trade tape exists** (`data-api.polymarket.com/trades`, full history per
   market, paginated) which reopens the maker question in section 1.
 - **History is reachable**: closed Feb-Aug events answer by slug with outcomes

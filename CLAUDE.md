@@ -37,13 +37,15 @@ money now; real money (starting at $50-100) later.
 
 ## Decided
 
-- **Pricing a hit (one-touch) market:** continuous one-touch formula with the
-  **at-the-money implied vol** of the first expiry at or after the deadline.
-  Scored against 7,750 resolved observations (2026-11-03): ATM Brier 0.0912,
-  barrier-strike vol 0.0922, rule of two 0.1033 (exact-expiry rows only),
-  highest-volume option's vol 0.1136. No regular-hours correction: it moved
-  fair by a median 1.4c and did not improve the score (0.0941 vs 0.0945). A
-  marked comment in the pricing code says where it would go.
+- **Pricing a hit (one-touch) market:** touch probability over **regular hours
+  only** (the market's own rule), with the **at-the-money implied vol** of the
+  first expiry at or after the deadline. The split of variance between session
+  and overnight (`f`) comes from each stock's past daily bars: the one accepted
+  exception to "option prices only", decided 2026-11-05. Scored on 9,272
+  observations of markets past their deadline: regular hours + ATM Brier 0.0788,
+  regular hours + barrier-strike vol 0.0792, continuous + ATM 0.0799, continuous
+  + barrier-strike vol 0.0811. Earlier scores included unfinished markets, which
+  only appear as resolved once touched, and are not comparable.
 - **Fills:** a fill counts if the book had the size when we looked. The ~40 s
   recheck showed 80-88% of filled dollars still buyable, so there is no
   separate "confirmed" ledger.
@@ -63,6 +65,16 @@ money now; real money (starting at $50-100) later.
 - **WTI:** priced from USO options, vol converted at the same moneyness, with
   the contract-switch (roll) gap removed. Kalshi: kept and simulated.
 - **Reporting:** a local HTML dashboard, regenerated whenever it is opened.
+
+## Focus (2026-11-05)
+
+Only `edge_taker` on Polymarket hit markets is being developed. Hedged books,
+other new models and the bar are parked. A cleanup may simplify anything but must
+roughly reproduce, on the baseline dates, the settled result of `edge_taker`,
+account `max`: weekly 855 bets, $100,113 in, $8,028 promised, PnL $5,384; monthly
+379 bets, $23,759 in, $1,437 promised, PnL $3,322 (a local check; needs the store).
+The other types (close-above, range, up-down, Kalshi, WTI) lose money or are not
+believable yet: leave them out of a cleanup's reasoning, delete only on request.
 
 ## Formats
 

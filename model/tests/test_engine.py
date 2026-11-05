@@ -111,6 +111,12 @@ def test_the_engine_reports_the_vol_it_priced_on(priced):
     assert np.isfinite(row["sigma_atm"]) and row["n_strikes"] > 0
 
 
+def test_a_priced_market_carries_the_intraday_share_it_used(priced):
+    frame, _ = priced
+    row = _market(frame, PLTR_HIT_DOWN_165)
+    assert 0.05 <= row["f"] <= 0.99
+
+
 def test_pricing_is_reproducible(priced):
     """Same cycle, same numbers."""
     frame, _ = priced

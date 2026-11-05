@@ -38,7 +38,7 @@ FAIR = pa.schema([pa.field(n, t) for n, t in [
     # the fair: the probability of a touch
     ("fair", F),
     # the inputs, so any row can be recomputed by hand
-    ("sigma_atm", F), ("spot", F), ("spot_source", S), ("rate", F),
+    ("sigma_atm", F), ("f", F), ("spot", F), ("spot_source", S), ("rate", F),
     ("T_sessions", F), ("T_years", F), ("expiry", S), ("n_strikes", I),
     # the reasons not to believe it
     ("quote_age_s", F), ("book_age_s", F), ("book_timestamp_utc", S),

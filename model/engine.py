@@ -28,6 +28,7 @@ path, not a level, and seven of `edge_taker`'s ten resolved NO positions on
 from __future__ import annotations
 
 import datetime as dt
+import math
 import time
 
 import numpy as np
@@ -48,6 +49,7 @@ STALE_BOOK_S = 900.0     # a book untouched for longer than one cycle is a fossi
 # Yesterday's smile against today's spot is not a fair value; past this age the
 # chain is treated as absent and the market is left unpriced.
 STALE_CHAIN_S = 1800.0
+DEFAULT_F = 0.6          # too little history to estimate; INSIGHTS 3.3 expects 0.5-0.7
 
 
 def expiry_closes(expiries, sess: pd.DataFrame) -> dict:
@@ -118,6 +120,11 @@ def price_cycle(cycle_id: str) -> tuple[pd.DataFrame, dict]:
     # One clock per ticker, so a cached smile does not depend on which of that
     # ticker's markets asked for it first (they are fetched seconds apart).
     reference_times = markets.groupby("ticker")["fetched_at_utc"].max()
+
+    # A week and a month need different numbers of legs; size for the longest.
+    max_legs = int(math.ceil(float(np.nanmax(markets["T_sessions"])))) + 2
+    pool = fairlib.normal_pool(max_legs)
+    shares: dict[str, float] = {}
 
     iv_gaps: list[float] = []
 
@@ -230,16 +237,15 @@ def price_cycle(cycle_id: str) -> tuple[pd.DataFrame, dict]:
         flags.set("deep_otm", fairlib.deep_otm(spot, barrier, sigma_atm, t_years))
 
         fair = float("nan")
+        if ticker not in shares:
+            shares[ticker] = _intraday_share(ticker, reference_times[ticker])
         if np.isfinite(sigma_atm):
-            direction = "up" if is_up else "down"
-            # Continuous monitoring, although the venue watches regular-hours
-            # candles only. A regular-hours correction would go here. Measured
-            # 2026-10-30 on 3,326 markets: it moved fair by a median 1.4c
-            # (p90 5.3c) and did not improve the Brier score (0.0941 with it,
-            # 0.0945 without), so it is not applied (CLAUDE.md, Decided).
-            fair = float(fairlib.one_touch(spot, barrier, t_years, sigma_atm, rate, direction))
+            # Regular hours only, as the rules say. Continuous monitoring scored
+            # worse on 9,272 finished-market observations (Brier 0.0799 vs 0.0788).
+            fair = fairlib.touch_probability(spot, barrier, t_sessions, sigma_atm, rate,
+                                             shares[ticker], is_up, pool)
 
-        rows.append({**row, "fair": fair, "sigma_atm": sigma_atm,
+        rows.append({**row, "fair": fair, "sigma_atm": sigma_atm, "f": shares[ticker],
                      "expiry": str(expiry.date()) if expiry is not None else None,
                      "n_strikes": n_strikes, **flags.columns()})
 
@@ -262,6 +268,15 @@ def price_cycle(cycle_id: str) -> tuple[pd.DataFrame, dict]:
                     len(worst_iv), len(gaps),
                     ", ".join(f"{s} ours={o:.3f} cboe={c:.3f}" for s, o, c in worst))
     return frame, stats
+
+
+def _intraday_share(ticker: str, as_of) -> float:
+    """`f` for one ticker from the daily bars known at `as_of`."""
+    bars = data.daily_bars_asof(ticker, as_of)
+    if bars is None or bars.empty:
+        return DEFAULT_F
+    f = fairlib.intraday_variance_share(bars["open"].values, bars["close"].values)
+    return DEFAULT_F if not np.isfinite(f) else float(np.clip(f, 0.05, 0.99))
 
 
 def _quote_spot(ticker: str, cboe: pd.Series, spot: float) -> float:

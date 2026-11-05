@@ -3,11 +3,12 @@
 Every model calls this; they differ in how they size, never in how the number
 is computed.
 
-A hit market's fair is the continuous one-touch formula (`one_touch`) with the
-at-the-money implied vol of the first expiry at or after the deadline
-(CLAUDE.md, Decided). Polymarket resolves on regular-hours candles only, so
-continuous monitoring counts some touches the venue does not; the correction
-was measured and not adopted (see the comment in `engine.price_cycle`).
+A hit market's fair is the regular-hours touch probability (`touch_probability`)
+with the at-the-money implied vol of the first expiry at or after the deadline
+(CLAUDE.md, Decided). Polymarket resolves on regular-hours candles only, so the
+continuous `one_touch` counts touches the venue does not. The split of variance
+between session and overnight (`f`) comes from the stock's past daily bars: the
+one input of this formula the option market does not give.
 
 Reasons not to believe a fair are flagged, not hidden (`Flags`). The chain is
 15 minutes older than the book; `quote_age_s` carries it.
@@ -19,6 +20,8 @@ from dataclasses import dataclass, fields
 
 import numpy as np
 import pandas as pd
+
+from sessions import TRADING_DAYS
 
 
 SQRT_2 = math.sqrt(2.0)
@@ -270,6 +273,138 @@ class Flags:
     def columns(self) -> dict:
         """One boolean column per flag, plus `flags`, the ones set, joined."""
         return {**{n: getattr(self, n) for n in self.names()}, "flags": self.as_string()}
+
+
+# ------------------------------------------- regular-hours touch, INSIGHTS 3.3
+
+
+DEFAULT_PATHS = 20_000
+
+
+def normal_pool(max_legs: int, paths: int = DEFAULT_PATHS, seed: int = 20260916) -> np.ndarray:
+    """Antithetic standard normals, shape (paths, max_legs, 2), generated once.
+
+    Reused for every market in a cycle, which makes the run reproducible. The
+    two halves are exact negatives of each other.
+    """
+    rng = np.random.default_rng(seed)
+    half = rng.standard_normal((paths // 2, max_legs, 2))
+    return np.concatenate([half, -half], axis=0)
+
+
+def _legs(sessions_left: float) -> list[tuple[float, bool]]:
+    """Split the horizon into (session fraction, has an overnight gap) legs.
+
+    A fractional result from `sessions_remaining` means the cycle is inside a
+    session, so the first leg is the rest of today with no gap in front of it.
+    An integer means the cycle is outside one, so every session ahead - the
+    next one included - opens with a gap.
+    """
+    n_full = int(math.floor(sessions_left + 1e-9))
+    frac = sessions_left - n_full
+    legs: list[tuple[float, bool]] = []
+    if frac > 1e-9:
+        legs.append((frac, False))
+    legs += [(1.0, True)] * n_full
+    return legs
+
+
+def touch_probability(spot: float, barrier: float, sessions_left: float, sigma: float,
+                      rate: float, f: float, is_up: bool, pool: np.ndarray) -> float:
+    """P(touch during regular hours only), INSIGHTS 3.3, by Monte Carlo.
+
+    Per session: an unobserved overnight gap carrying `(1-f)` of the variance,
+    then an observed session carrying `f` of it. A touch happens if any open or
+    close is beyond the barrier, or if the Brownian bridge between an open and
+    its close crosses it:
+
+        P(cross | O, C) = exp(-2 * (b - o) * (b - c) / v)
+
+    in log space, with `v` the session's variance. Note the expression is the
+    same for an up and a down barrier - `(b-o)(b-c)` is symmetric under
+    reflection - so there is one code path and no sign to get backwards.
+
+    The bridge probability is multiplied into a survival factor rather than
+    turned into a coin flip. That is conditional Monte Carlo: it integrates the
+    within-session crossing exactly instead of sampling it, and it cuts the
+    variance by roughly an order of magnitude for the same number of paths.
+    """
+    legs = _legs(sessions_left)
+    if len(legs) > pool.shape[1]:
+        raise ValueError(f"normal pool holds {pool.shape[1]} legs, this market needs "
+                         f"{len(legs)}; size the pool from the cycle's longest horizon")
+    if not legs or sigma <= 0 or spot <= 0 or barrier <= 0:
+        beyond_now = (spot >= barrier) if is_up else (spot <= barrier)
+        return 1.0 if beyond_now else 0.0
+
+    b = math.log(barrier)
+    sgn = 1.0 if is_up else -1.0
+    if sgn * (math.log(spot) - b) >= 0:
+        return 1.0                      # already beyond: the touch is pending
+
+    dt = 1.0 / TRADING_DAYS
+    mu = rate - 0.5 * sigma ** 2
+    var_day = sigma ** 2 * dt
+
+    paths = pool.shape[0]
+    log_s = np.full(paths, math.log(spot))
+    survive = np.ones(paths)
+    alive = np.ones(paths, dtype=bool)
+
+    for i, (share, has_gap) in enumerate(legs):
+        z_gap, z_day = pool[:, i, 0], pool[:, i, 1]
+        if has_gap:
+            var_gap = (1.0 - f) * var_day
+            log_o = log_s + (1.0 - f) * mu * dt + math.sqrt(max(var_gap, 0.0)) * z_gap
+        else:
+            log_o = log_s
+        alive &= (sgn * (log_o - b) < 0)          # the gap opened through it
+        var_day_leg = f * var_day * share
+        log_c = log_o + f * mu * dt * share + math.sqrt(max(var_day_leg, 0.0)) * z_day
+        alive &= (sgn * (log_c - b) < 0)
+        if var_day_leg > 0:
+            cross = np.exp(np.clip(-2.0 * (b - log_o) * (b - log_c) / var_day_leg, -700, 0.0))
+            survive *= np.where(alive, 1.0 - cross, 0.0)
+        else:
+            survive *= alive                       # f = 0: nothing inside the session
+        log_s = log_c
+        if not alive.any():
+            break
+    survive = np.where(alive, survive, 0.0)
+    return float(1.0 - survive.mean())
+
+
+def intraday_variance_share(opens, closes, min_sessions: int = 60) -> float:
+    """`f`: the fraction of daily variance that arrives inside the session.
+
+    Daily variance splits cleanly in two because the overnight gap and the
+    intraday move are (near enough) independent:
+
+        ln(C_i / C_{i-1}) = ln(O_i / C_{i-1}) + ln(C_i / O_i)
+                             \\_____ gap _____/   \\___ session ___/
+
+    `f = var(session) / (var(gap) + var(session))`. INSIGHTS 3.3 expects 0.5-0.7
+    for single names and higher for SPY, which is the check to run on the
+    numbers this returns rather than on this docstring.
+
+    Returns NaN on too little data; the caller then falls back to a default
+    rather than pricing off a number estimated from a handful of sessions.
+    """
+    o = np.asarray(opens, dtype=float)
+    c = np.asarray(closes, dtype=float)
+    if len(o) != len(c) or len(c) < min_sessions + 1:
+        return float("nan")
+    gap = np.log(o[1:] / c[:-1])
+    session = np.log(c[1:] / o[1:])
+    keep = np.isfinite(gap) & np.isfinite(session)
+    if keep.sum() < min_sessions:
+        return float("nan")
+    var_gap = float(np.var(gap[keep]))
+    var_session = float(np.var(session[keep]))
+    total = var_gap + var_session
+    if total <= 0:
+        return float("nan")
+    return var_session / total
 
 
 def deep_otm(spot: float, barrier: float, sigma_atm: float, years: float,

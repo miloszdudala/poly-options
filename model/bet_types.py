@@ -91,7 +91,7 @@ NOT_STOCKS = frozenset({"WTI", "XAUUSD", "XAGUSD", "DXY", "GLD", "SLV", "USO", "
 
 class PolymarketHit(Polymarket):
     """Polymarket "will X hit $B by the deadline" markets on stocks, priced by
-    the engine (`engine.price_cycle`, one-touch with ATM vol) and read from the
+    the engine (`engine.price_cycle`, regular-hours touch with ATM vol) and read from the
     fair store. A subclass sets `name` and `period`."""
 
     contract_types = ("hit_up", "hit_down")

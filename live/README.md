@@ -151,9 +151,9 @@ README). `strategy.py` was copied from `sim.candidate_edges` and
 
 **Since the refactor of 2026-11-04 the copy is out of date** (whether it stays
 a separate copy is Open in `CLAUDE.md`). `model/` now prices hit markets with
-the continuous one-touch and the ATM vol of the first expiry at or after the
-deadline, one fair for both sides; `pricing_engine/` still has the
-regular-hours Monte Carlo, the barrier-strike vol and the min/max rule, and
+the regular-hours touch probability and the ATM vol of the first expiry at or
+after the deadline, one fair for both sides; `pricing_engine/` still has the
+barrier-strike vol and the min/max rule, and
 `strategy.py` still follows `sim.candidate_edges`, which no longer exists. The
 replays also have no per-market caps now (`max` account). So live differs
 from the replays in its pricing as well as in what follows: flat $5 caps, no

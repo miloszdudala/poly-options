@@ -30,7 +30,7 @@ data) is in `INSIGHTS.md` §1–4 and §6. Code comments citing "MODELS §3.x" o
 
 | type | markets | priced by |
 |---|---|---|
-| `poly-hit-weekly-stock`, `poly-hit-monthly-stock` | Polymarket "hit $B" on stocks | continuous one-touch, ATM vol of the first expiry at or after the deadline (`engine.py`) |
+| `poly-hit-weekly-stock`, `poly-hit-monthly-stock` | Polymarket "hit $B" on stocks | regular-hours touch probability, ATM vol of the first expiry at or after the deadline (`engine.py`) |
 | `poly-close-above-{daily,weekly,monthly}-stock` | "close above $K" | out-of-the-money option spread at the expiry equal to the deadline |
 | `poly-up-down-daily-stock` | "Up or Down"; strike = the previous trading day's close; "Opens Up or Down" skipped | out-of-the-money option spread at that day's expiry |
 | `poly-range-weekly-stock` | "close at $L–$H" | difference of two call-spread close-aboves |
@@ -75,8 +75,7 @@ will be written as model files. Their predecessors, `direction_balanced` and
 ## Results so far (historical, under code that no longer exists)
 
 The numbers below come from the `run_all.py` run of 2026-10-09, under the
-pricing and accounts before the 2026-11-04 refactor: the regular-hours Monte
-Carlo, `min(fair_K, fair_atm)` for YES and `max` for NO, a $10,000 bankroll
+pricing and accounts before the 2026-11-04 refactor: `min(fair_K, fair_atm)` for YES and `max` for NO, a $10,000 bankroll
 with $150 YES / $500 NO per-market caps, and an optimistic / confirmed split
 of fills. They cannot be reproduced with the current code (git history can),
 and two of the models below are deleted. The 2¢ YES premium applied.

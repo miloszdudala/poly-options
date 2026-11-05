@@ -124,14 +124,19 @@ and how much.
 
 ### 3.3 Touch probability (Decided)
 
-`fair = one_touch(S_book, B, T, sigma_atm, r)`, the continuous one-touch
-formula (FINDINGS §2). Scored against 7,750 resolved observations
-(2026-11-03): ATM Brier 0.0912, barrier-strike vol 0.0922, highest-volume
-option's vol 0.1136. The venue watches regular-hours candles only, so
-continuous monitoring counts some touches it does not; a regular-hours
-correction moved fair by a median 1.4¢ (p90 5.3¢) on 3,326 markets on
-2026-10-30 and did not improve the score (0.0941 vs 0.0945), so it is not
-applied. A marked comment in `engine.price_cycle` says where it would go.
+`fair = touch_probability(S_book, B, T_sessions, sigma_atm, r, f)`. The venue
+watches regular-hours candles only: a move beyond the barrier that reverses
+overnight does not count, an open beyond it does. So each session is an
+unwatched overnight gap carrying `1-f` of the day's variance, then a watched
+session carrying `f`, simulated with a Brownian bridge inside the session.
+`f = var(session) / (var(gap) + var(session))` from the stock's past daily bars,
+as known at the cycle (0.52-0.75 for most stocks, 0.6 if under 60 sessions).
+
+Scored on 9,272 observations of markets past their deadline, one look a day:
+regular hours + ATM Brier 0.0788, regular hours + barrier-strike vol 0.0792,
+continuous + ATM 0.0799, continuous + barrier-strike vol 0.0811. Against the
+continuous formula it lowers fair by a median 0.5¢ (p90 3.9¢). Moving `f` from
+0.5 to 0.75 moves fair by a median 0.4¢ (p90 3.3¢).
 
 ### 3.4 Reliability flags carried on every hit fair
 
