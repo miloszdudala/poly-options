@@ -91,6 +91,9 @@ Accounts belong to the harness. `PLAN.md` T3 has the details.
 - `model/` - pricing (`engine.py`, `fair.py`), simulation (`sim.py`), models
   (`models/`), reports. `model/run_all.py` runs every model; writes
   `model/store/` (not in git) and `model/reports/`.
+- `model/record_bets.py` - appends `edge_taker`'s weekly hit bets, as they are
+  decided, to the separate `poly-options-bets` repository: the pre-resolution
+  proof. Never rewrite that history.
 - `live/` - the real-money trader. Dry by default. Independent of `model/`.
 - `scheduling/` - launchd jobs for the collector and the daily report.
 

@@ -12,7 +12,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGENTS="$HOME/Library/LaunchAgents"
-LABELS=(com.polyoptions.snapshot com.polyoptions.daily com.polyoptions.report)
+LABELS=(com.polyoptions.snapshot com.polyoptions.daily com.polyoptions.report com.polyoptions.recordbets)
 
 uninstall() {
     for label in "${LABELS[@]}"; do
