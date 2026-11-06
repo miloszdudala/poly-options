@@ -1,0 +1,5 @@
+# The control: the MVP's markets with no signal. If it earns what mvp earns,
+# the window drifted and nothing has shown an edge.
+extends: mvp
+bar: {min_ev: -1, min_roi: -1, dear_min_ev: -1, dear_min_roi: -1, yes_premium: 0}
+sizing: {use: random_control, orders_per_cycle: 12, slip: 0.02}

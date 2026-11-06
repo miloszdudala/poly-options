@@ -6,6 +6,9 @@ what we have measured, and which mistakes not to repeat.
 
 Last updated: 2026-09-18 (section 7 added; the model design is in `model/MODELS.md`). All numbers below come from the snapshot of
 2026-09-16 15:53 ET and the 21 cycles collected overnight into 2026-09-17.
+Checked against the code on 2026-11-04: what has since been decided in
+`CLAUDE.md` is marked so, and takeaways not decided there are labelled
+*(unapproved)*.
 
 ---
 
@@ -20,13 +23,14 @@ That is the whole objective. Everything below is a working assumption about
 The bet is: buy at 0.35, get paid 1.00 or 0.00. The only execution cost is the
 price paid plus the fee, once.
 
-This is a **conclusion, not a rule**. It follows from one measurement: exiting is
-expensive. Buying $100 and selling it straight back costs ~48% on close_above and
+*Since decided (`CLAUDE.md`): every bet is held to resolution; the project is
+not a round-trip trader.* At the time this was a conclusion, not a rule. It
+followed from one measurement: exiting is expensive. Buying $100 and selling it straight back costs ~48% on close_above and
 ~18-42% on hit markets (section 3.3), so a strategy that needs to sell gives back
 more than the edge. Holding to resolution is simply the only approach we can
 currently see that clears its own costs.
 
-A different model may well find something better. Nothing here forecloses it.
+
 
 ### Status of the alternatives — these differ, and the difference matters
 
@@ -37,18 +41,23 @@ A different model may well find something better. Nothing here forecloses it.
 | **Market making / resting orders** | *Untested, not refuted.* Fees are taker-only with a 25% maker rebate, so the economics point this way. We chose not to collect the trade tape, so we cannot yet tell whether a resting order would fill, or only fill when we are wrong. Reopening this means collecting CLOB trades. |
 | **Something else** | Open. |
 
-Do not read "hold to resolution" anywhere below as a constraint on what the
-project may do. It is the current best guess at the only sensible approach.
+The table is as of 2026-09-18. Holding to resolution has since become a rule
+(`CLAUDE.md`); the maker row is untested still (`model/MODELS.md`).
 
 ---
 
-## 2. The method that works
+## 2. The method as first measured (2026-09-16)
+
+*Since decided (`CLAUDE.md`): a regular-hours touch probability with the ATM vol
+of the first expiry at or after the deadline, one fair for both sides. Steps
+5 (two vols, positive under both) and the "1 - bid" NO price are not what the
+code does: the NO token's own ask is used.*
 
 For each prediction market:
 
 1. `fair` = Black-Scholes one-touch probability from the option smile.
 2. The price you pay is `ask` (to buy YES) or `1 - bid` (to buy NO).
-3. Fee = `0.04 x min(p, 1-p)` per share on the price paid.
+3. Fee = `0.04 x min(p, 1-p)` per share on the price paid. *(Corrected 2026-11-04: the venue charges `0.04 x p x (1-p)`, which is what the code now uses.)*
 4. `edge = fair - price - fee`.
 5. Compute `fair` **twice** — once with IV at the barrier strike, once with ATM
    IV. Keep only markets positive under both.
@@ -61,7 +70,8 @@ P(touch) = N((mT - b)/(sigma*sqrt(T))) + exp(2mb/sigma^2) * N((-b - mT)/(sigma*s
 ```
 
 At zero drift this is ~ `2 x digital`, which gives a model-free cross-check
-straight off a call spread.
+straight off a call spread. (An option spread now prices the
+close-above, up/down, range and Kalshi extensions, `pipeline/prob.py` `call_spread`.)
 
 ### The method that does NOT work — do not repeat this
 
@@ -121,8 +131,9 @@ Mid price vs option-implied fair, 9,841 observations over 21 cycles:
 | 35-65c | 0.490 | 0.525 | -0.031 | 23% |
 
 Longshots priced at roughly **2x fair**; the middle underpriced. The classic
-gambler-dominated signature. Robust in direction: the skew error (3.3) inflates
-fair for OTM barriers, so true longshot overpricing is *larger* than shown.
+gambler-dominated signature *(unapproved)*. Robust in direction: the skew error
+(5.2) inflates fair for OTM barriers, so true longshot overpricing is *larger*
+than shown *(unapproved)*.
 
 ### 3.3 Costs
 
@@ -130,11 +141,14 @@ fair for OTM barriers, so true longshot overpricing is *larger* than shown.
   same order. Verified on 629 markets, max difference 0.0. There is no separate
   vig to hunt for.
 - **Fee = 4% of the price paid, flat**, for anything under 50c (because
-  `0.04 * p / p`). Less above 50c: ~1% at 71c.
+  `0.04 * p / p`). Less above 50c: ~1% at 71c. *(Corrected 2026-11-04: the
+  venue's `0.04 * p * (1-p)` is 4% of `1-p`: 3.2% at 20c, 2% at 50c, 1.2% at 70c.
+  The cost percentages below were measured with the old formula.)*
 - Median one-way cost as % of price, by bucket: under 5c **74%**, 5-15c 49%,
   15-35c 24%, 35-65c 15%, over 65c **8.6%**. The absolute spread barely changes
   (0.04-0.10) across the range, so cheap contracts are ruinous in percentage
-  terms. **Do not buy cheap contracts.**
+  terms. **Do not buy cheap contracts** *(unapproved; no rule in the code
+  rests on it: the bar judges EV and return at the price paid)*.
 
 ### 3.4 No model-free arbitrage
 
@@ -149,7 +163,8 @@ inconsistencies within Polymarket.
 Equity prediction markets on Polymarket shrank ~90% between Feb and Aug 2026
 (monthly close-above -96%, weekly -94%, hit -78%). Volume did **not** rotate from
 close-above into hit markets; everything shrank. Full table in `MARKETS.md`.
-Median spreads now: hit ~7c, close_above ~19c. Hit markets are the live ones.
+Median spreads now: hit ~7c, close_above ~19c. Hit markets are the live ones
+*(unapproved)*.
 
 ---
 
@@ -161,7 +176,8 @@ Median spreads now: hit ~7c, close_above ~19c. Hit markets are the live ones.
   `open_interest >= 100` or `volume > 0`.
 - **Chain liquidity by name matters**: PLTR 82% of strikes traded, TSLA 77%,
   EWY **27%**, ABNB 26%, NDX 19%. EWY screened top of the list and was pure
-  artifact. Restrict to liquid-chain names.
+  artifact. Restrict to liquid-chain names *(unapproved; the code filters
+  contracts on open interest and volume, not names)*.
 - **Cboe IV is correct; yfinance IV is not.** On identical bid/ask, yfinance runs
   ~9-11 vol points low. Verified by inverting Black-Scholes by hand: own
   calculation matched Cboe to within 0.008 at every strike. Use Cboe.
@@ -176,33 +192,33 @@ Median spreads now: hit ~7c, close_above ~19c. Hit markets are the live ones.
 
 ## 5. Open questions
 
-1. **Regular-hours-only monitoring — the big one.** Fair values assume
-   *continuous* monitoring; Polymarket resolves on Pyth 1-minute candles during
-   regular hours only. True touch probability is therefore **lower** than
-   computed. This shrinks most of the current list (mostly `hit_down` YES buys)
-   and widens the NO-side ones. Unquantified. Could delete half the edges.
+1. **Regular-hours-only monitoring.** *Since measured and decided
+   (`CLAUDE.md`): on markets past their deadline the correction scores Brier
+   0.0788 against 0.0799 for the continuous formula, and it is used.* At the time: Polymarket resolves on Pyth 1-minute candles
+   during regular hours only, so the true touch probability is lower than the
+   continuous formula's.
 2. **Deep-OTM barriers are unreliable.** Feeding one smile point into a
    constant-vol formula double-counts skew. SPY hit_down 700, 14 days: fair
    ranges 0.0018 (ATM IV) to 0.1466 (barrier IV) — 80x. Near-the-money barriers
    are fine: median disagreement between the two IVs is **0.006**. Discount deep
-   OTM specifically, not everything.
-3. **Nothing is verified against outcomes yet.** The decisive test needs no model
-   at all: do contracts priced at 3-5c resolve YES 3-5% of the time? Needs weeks
-   of expiries in `resolutions`. Accumulating since 2026-09-16.
+   OTM specifically, not everything. (The code flags `deep_otm` past 2.5
+   standard moves and does not trade it.)
+3. **Verification against outcomes.** *Since done for the hit pricing: 7,750
+   resolved observations scored on 2026-11-03 (`CLAUDE.md`).* The model-free
+   test (do contracts priced at 3-5c resolve YES 3-5% of the time?) is the
+   reliability table in every report.
 4. **Barrier prices are very spot-sensitive.** PLTR fair moved 0.39 -> 0.70 as
    spot went 170 -> 174. With 15-minute-old books, timing matters.
 5. **Depth caps size** at a few hundred dollars per market.
 
-## 6. Next steps, ranked
+## 6. Next steps as ranked on 2026-09-18 (since resolved)
 
-1. **Empirical touch frequencies from `underlying_bars`** (5 years daily, 60 days
-   of 5-minute). How often did PLTR *actually* touch +2.5% within 2 days? No
-   Black-Scholes, no implied vol, no skew choice — a fully independent third
-   opinion using data already on disk. Also answers open question 1 directly, by
-   counting touches during regular hours only.
-2. **Quantify the monitoring correction** and re-run the screen.
-3. **Smile-consistent barrier pricing** (whole smile, not one strike). More
-   correct, more work, only refines what 1 and 2 already test.
+1. Empirical touch frequencies from `underlying_bars`: built, then removed on
+   2026-11-04; fair values come from option prices only (`CLAUDE.md`: not a
+   modelling project).
+2. Quantify the monitoring correction: done; not applied (§5.1).
+3. Smile-consistent barrier pricing: not built; the decided pricing uses the
+   ATM vol.
 
 ---
 
@@ -226,9 +242,8 @@ Median spreads now: hit ~7c, close_above ~19c. Hit markets are the live ones.
   before the fetch and spot matched the bar 15-18 minutes earlier. Use
   `max(last_trade_time_utc)` per symbol per cycle. The 09-16 rows had it four
   hours late on top of that; repaired.
-- **Fair values must model regular-hours-only monitoring** (open question 5.1)
-  before any model trades: see `model/INSIGHTS.md` §3.3 for the session-by-
-  session bridge construction that does it.
+- ~~Fair values must model regular-hours-only monitoring before any model
+  trades.~~ Built and adopted: `model/INSIGHTS.md` §3.3.
 - **Trade tape exists** (`data-api.polymarket.com/trades`, full history per
   market, paginated) which reopens the maker question in section 1.
 - **History is reachable**: closed Feb-Aug events answer by slug with outcomes

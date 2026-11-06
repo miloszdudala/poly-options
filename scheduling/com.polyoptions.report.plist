@@ -20,7 +20,8 @@
     <key>ProgramArguments</key>
     <array>
         <string>__REPO__/.venv/bin/python</string>
-        <string>__REPO__/model/daily.py</string>
+        <string>__REPO__/model/run.py</string>
+        <string>daily</string>
     </array>
 
     <key>StartCalendarInterval</key>

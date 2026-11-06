@@ -1,12 +1,8 @@
-"""NYSE session arithmetic, shared by the engine and the calibration report.
+"""NYSE session arithmetic, used by the engine.
 
 `sessions_remaining` is the one place where MODELS 3.3's "regular hours only"
-becomes a number, and everything downstream - the horizon of the Monte Carlo,
-k in the empirical table, T in Black-Scholes - is scaled by it. A fractional
-result also decides whether the Monte Carlo's first leg opens with an overnight
-gap, so the fraction is not decoration.
+becomes a number, and the horizon of every fair value is scaled by it.
 """
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -100,5 +96,5 @@ def test_deadline_close_is_nat_before_the_calendar_starts():
     ("20261102T211500Z-x", False),
 ])
 def test_in_session_follows_new_york_time_across_the_dst_change(cycle_id, expected):
-    import data
-    assert data.in_session(cycle_id) is expected
+    import store
+    assert store.in_session(cycle_id) is expected

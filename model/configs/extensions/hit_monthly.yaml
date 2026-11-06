@@ -1,0 +1,3 @@
+# Extension: the MVP on monthly hit markets.
+extends: mvp
+markets: {period: monthly}

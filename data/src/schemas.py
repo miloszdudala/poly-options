@@ -130,6 +130,11 @@ SCHEMAS: dict[str, pa.Schema] = {
         ("outcome_prices", S), ("created_at", S),
     ]),
 
+    "kalshi_resolutions": _schema([
+        ("series_ticker", S), ("ticker", S), ("result", S), ("expiration_value", F),
+        ("close_time", S), ("settled_at_utc", S), ("fetched_at_utc", S),
+    ]),
+
     "runs": _schema([
         ("job", S), ("started_at_utc", S), ("ended_at_utc", S),
         ("duration_seconds", F), ("status", S),

@@ -4,7 +4,7 @@ One cloud session does all the tasks, in this order: T1, T2, T3, T4, T5, T7, T8.
 Read `CLAUDE.md` first; its rules apply to every task.
 
 **How to work through them:**
-- Setup first: `pip install -r requirements.txt -r live/requirements.txt`.
+- Setup first: `pip install -r requirements.txt`.
 - One branch, one pull request at the end, and **exactly one commit per task**,
   with the task number first in the message ("T1: ..."). The user's machine
   checks each commit separately against the baseline, so a commit must not mix
@@ -208,7 +208,7 @@ network, and the PR includes a screenshot.
 ## T8 - Docs check (last)
 
 For `README.md`, `MARKETS.md`, `FINDINGS.md`, `model/MODELS.md`,
-`model/INSIGHTS.md`, `live/README.md`, `model/docs/models_explained.html`:
+`model/INSIGHTS.md`, `model/docs/models_explained.html`:
 - delete what describes removed code;
 - check every factual claim against the code; fix or flag it;
 - label every takeaway not listed as decided in `CLAUDE.md` *(unapproved)*.

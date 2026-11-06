@@ -6,12 +6,19 @@ stock prices with probabilities implied by listed options.
 Three sections, kept apart on purpose:
 
 - **`data/`** (this README) collects. No accounts, no API keys, no orders.
-- **`model/`** replays the signal over the collected data: `model/MODELS.md`
-  describes each model and its results, `model/INSIGHTS.md` the engine, the
-  accounting and what the data has taught us.
-- **`live/`** trades it with real money, only when you start it. See
-  `live/README.md`. It reads the collector's store and shares no code with
-  `model/`.
+- **`model/`** prices the markets from the option chain and replays models
+  over the collected data: `model/MODELS.md` describes each model and type and
+  their results, `model/INSIGHTS.md` the pricing, the accounting and what the
+  data has taught us. Commands:
+
+  ```bash
+  .venv/bin/python model/run.py --help                   # replay configs (default: mvp, control)
+  .venv/bin/python model/run.py --dates 2026-09-16,... --save --tag name
+  .venv/bin/python model/run.py daily                    # replay, write the daily report
+  .venv/bin/python model/run.py sample --synthetic --out model/samples/synthetic
+  .venv/bin/python model/run.py --store model/samples/synthetic lab sweep --vary bar.min_ev=0.03,0.1
+  .venv/bin/python model/run.py dashboard                # rebuild and open the dashboard
+  ```
 
 Because liquidity is thin, the **full order book** (every level, both sides, both
 outcome tokens) is stored at every snapshot. Mid, last trade and best bid/ask are
@@ -54,7 +61,7 @@ Cadence:
 |---|---|
 | every 15 min, 09:30–16:00 ET on NYSE sessions | Polymarket books, option chains, spot; every tracked event re-read by slug (new barriers, outcomes) |
 | once per session, after the first tick's books and options | full Polymarket discovery walk (`discovery.intraday_interval_minutes`); resumes across ticks if the budget runs out |
-| ~hourly within the session | Kalshi books (distant expiries; they do not move faster) |
+| ~hourly within the session | Kalshi books (chosen for the distant expiries, on the view that they do not move faster *(unapproved)*; the daily Kalshi types are priced on these hourly books) |
 | outside the session | **nothing** |
 | 17:30 ET, trading days | discovery, metadata, rates, dividends, earnings, bars, price history |
 
@@ -170,7 +177,7 @@ FROM w GROUP BY market_id, ticker, strike;
 
 Measured on a September 2026 cycle: AAPL 370 `close_above` showed a 0.114 top
 ask, 0.145 average for $100, and 0.591 for $500. Sizing is not a refinement of
-the signal, it *is* the signal.
+the signal, it *is* the signal *(unapproved)*.
 
 **Always key on `market_id`.** `(ticker, strike, contract_type)` is not unique -
 MSFT `close_above` 510 is open in four months simultaneously - so grouping on
@@ -193,24 +200,29 @@ big daily ladders run 20-31¢.
 
 ### Fees are not optional
 
-Every tracked Polymarket market carries
+Tracked Polymarket markets normally carry
 `{rate: 0.04, exponent: 1, takerOnly: true, rebateRate: 0.25}`, stored per market
-in `poly_markets.fee_schedule`. With exponent 1 the taker fee is
-`0.04 x min(p, 1-p) x shares` - on a 20¢ contract that is 0.8¢/share, **4% of
-premium**, and makers are rebated 25% instead. Any edge measured against a mid
-price is measuring something untradeable: you pay the spread *and* the fee.
+in `poly_markets.fee_schedule` (and `zero_fees` on most markets from 2026-10-20
+to 2026-10-30). The taker fee is `rate x p x (1-p) x shares`
+([docs](https://docs.polymarket.com/trading/fees)) - on a 20¢ contract at 4% that
+is 0.64¢/share, **3.2% of premium**, and makers are rebated 25% instead. The
+replays use each market's schedule as recorded at the time. Any edge measured against a mid
+price is measuring something untradeable: you pay the spread *and* the fee
+*(unapproved)*.
 
 ### Option quotes are 15 minutes stale, and the stored quote time is not the quote time
 
 MEASURED 2026-09-16 15:53Z fetch: the latest option print in the chain was
 15:38Z and the Cboe spot matched the 15:35Z 5-minute bar. The payload's
 top-level `timestamp` (stored as `source_quote_time_utc`) is the file's
-generation time, ~equal to our fetch time, **not** the quote time. Use
-`max(last_trade_time_utc)` per symbol per cycle as the quote time, and the
-5-minute bar containing `book_timestamp_utc` as the spot at the book. An
-option-implied probability compared against a live book without that
-delta-adjustment mostly measures 15 minutes of underlying drift; doing the
-correction is a **requirement in `model/`**, not an optional refinement.
+generation time, ~equal to our fetch time, **not** the quote time. The hit
+engine uses `max(last_trade_time_utc)` per symbol per cycle as the quote time
+and the open of the 5-minute bar containing the book's `fetched_at_utc` as the
+spot, and reuses the smile at that spot (sticky-strike). The types priced
+straight from option spreads (`prob.call_spread`) use the quotes as
+they stand, so their fair is up to 15 minutes older than the book. That an
+option probability compared against a live book without the correction
+mostly measures 15 minutes of drift is a takeaway *(unapproved)*.
 
 Rows written before commit dadb128 had `source_quote_time_utc` four hours
 late (the file clock parsed as Eastern); `data/migrations/2026-09-18_*.py`
@@ -294,10 +306,10 @@ without code changes.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest data/tests/ -q
+.venv/bin/python -m pytest data/tests model/tests -q
 ```
 
-Cover strike/barrier/type parsing (every string taken verbatim from the live
+`data/tests` cover strike/barrier/type parsing (every string taken verbatim from the live
 API), timestamp and timezone handling including the 1 November 2026 DST change,
 order-book flattening, expiry selection, and the cadence guard.
 

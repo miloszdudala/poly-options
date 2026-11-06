@@ -25,25 +25,27 @@ money now; real money (starting at $50-100) later.
 2. **A refactor must not change results.** Run the simulation before and after
    on the same dates; ledgers must match. A change that is meant to move
    results goes in its own commit, separately from refactoring.
-3. **Do not decide for the user.** Strategy, thresholds, caps, which markets to
-   trade and anything in `live/` are the user's. Offer options; do not pick.
+3. **Do not decide for the user.** Strategy, thresholds, caps and which markets to
+   trade are the user's. Offer options; do not pick.
    Anything listed under "Open" below stays open until the user decides it.
 4. **Mark unapproved claims.** A takeaway in a doc that the user has not
    approved is labelled *(unapproved)*. Never build on an unapproved takeaway.
 5. **No side preference.** At equal computed edge, YES and NO are equal. No
    rule may rest on "NO did better last month".
-6. **Never touch credentials.** `live/` trades real money; no session gets
-   Polymarket keys, and no code path in `model/` may place an order.
+6. **Never touch credentials.** No session gets Polymarket keys, and no code
+   path in `model/` may place an order.
 
 ## Decided
 
-- **Pricing a hit (one-touch) market:** continuous one-touch formula with the
-  **at-the-money implied vol** of the first expiry at or after the deadline.
-  Scored against 7,750 resolved observations (2026-11-03): ATM Brier 0.0912,
-  barrier-strike vol 0.0922, rule of two 0.1033 (exact-expiry rows only),
-  highest-volume option's vol 0.1136. No regular-hours correction: it moved
-  fair by a median 1.4c and did not improve the score (0.0941 vs 0.0945). A
-  marked comment in the pricing code says where it would go.
+- **Pricing a hit (one-touch) market:** touch probability over **regular hours
+  only** (the market's own rule), with the **at-the-money implied vol** of the
+  first expiry at or after the deadline. The split of variance between session
+  and overnight (`f`) comes from each stock's past daily bars: the one accepted
+  exception to "option prices only", decided 2026-11-05. Scored on 9,272
+  observations of markets past their deadline: regular hours + ATM Brier 0.0788,
+  regular hours + barrier-strike vol 0.0792, continuous + ATM 0.0799, continuous
+  + barrier-strike vol 0.0811. Earlier scores included unfinished markets, which
+  only appear as resolved once touched, and are not comparable.
 - **Fills:** a fill counts if the book had the size when we looked. The ~40 s
   recheck showed 80-88% of filled dollars still buyable, so there is no
   separate "confirmed" ledger.
@@ -63,14 +65,31 @@ money now; real money (starting at $50-100) later.
 - **WTI:** priced from USO options, vol converted at the same moneyness, with
   the contract-switch (roll) gap removed. Kalshi: kept and simulated.
 - **Reporting:** a local HTML dashboard, regenerated whenever it is opened.
+- **Real-money trading:** `live/` was removed on 2026-11-05 until there is
+  confidence in the results; the last commit with it is `251105b`. When trading
+  returns it must behave the same as the simulation.
+
+## Focus (2026-11-05)
+
+Only `edge_taker` on Polymarket hit markets is being developed. Hedged books,
+other new models and the bar are parked. A cleanup may simplify anything but must
+roughly reproduce, on the baseline dates, the settled result of `edge_taker`,
+account `max`: weekly 855 bets, $100,113 in, $8,028 promised, PnL $5,384; monthly
+379 bets, $23,759 in, $1,437 promised, PnL $3,322 (a local check; needs the store).
+The other types (close-above, range, up-down, Kalshi, WTI) lose money or are not
+believable yet: leave them out of a cleanup's reasoning, delete only on request.
 
 ## Formats
 
-A new model or a new type of bet is one new file, and no other file changes.
-A model (`model/models/`) receives this cycle's offers and what it holds, and
-returns orders. It does not know its account or where data comes from. A type
-(`model/types/`) says which markets belong to it, how to price one and its fee.
-Accounts belong to the harness. `PLAN.md` T3 has the details.
+Three parts: the collector (`data/`), the decision pipeline (`model/pipeline/`)
+and reporting (`model/reporting/`). The pipeline is one module per decision
+step (markets, inputs, vol, prob, gates, fee, bar, sizing, fills, account,
+settle); each step has named variants, and a config (`model/configs/*.yaml`)
+picks one variant per step. The MVP is `configs/mvp.yaml`; every other config
+`extends` it and changes a step or two (`configs/extensions/`). A new model,
+type or way of making a decision is a new variant in its step's module and,
+if it should run routinely, a few lines of config. `model/DECISIONS.md` lists
+every choice and whether it is decided, open or a guess.
 
 ## Open (do not decide these)
 
@@ -82,28 +101,31 @@ Accounts belong to the harness. `PLAN.md` T3 has the details.
   Only the risk premium was approved (2026-10-09). Each model declares its
   bar; keep today's unchanged until the user decides.
 - Whether gold, silver and the dollar index get the same conversion as WTI.
-- Whether `live/pricing_engine/` stays a separate copy of `model/` code.
 
 ## Layout
 
 - `data/` - collector. `data/src/jobs.py discover | snapshot | daily`. Writes
   `data/store/` (Parquet, ~2 GB, **not in git**).
-- `model/` - pricing (`engine.py`, `fair.py`), simulation (`sim.py`), models
-  (`models/`), reports. `model/run_all.py` runs every model; writes
-  `model/store/` (not in git) and `model/reports/`.
-- `model/record_bets.py` - appends `edge_taker`'s weekly hit bets, as they are
-  decided, to the separate `poly-options-bets` repository: the pre-resolution
-  proof. Never rewrite that history.
-- `live/` - the real-money trader. Dry by default. Independent of `model/`.
+- `BETS.md` - bets recorded before they resolve, the proof the idea works. It
+  must survive any rebuild of the code. Only ever add rows; never edit, move or
+  rewrite it or its history. `model/record_bets.py` writes it.
+- `model/` - `store.py` (the one door to the Parquet store, or to a sample of
+  it), `pipeline/` (the decision steps), `configs/`, `replay.py` (runs a
+  config over dates), `lab.py` (score or sweep one step on a sample),
+  `sample.py` / `synthetic.py` (small stores), `reporting/`, `daily.py`.
+  `model/run.py` is the one command; it writes `model/store/` (ledgers and
+  the pricing cache, not in git) and `model/reports/`.
 - `scheduling/` - launchd jobs for the collector and the daily report.
 
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest data/tests model/tests live/tests -q
-.venv/bin/python model/run_all.py --dates 2026-09-16,... --tag name
+.venv/bin/python -m pytest data/tests model/tests -q
+.venv/bin/python model/run.py --dates 2026-09-16,... --save --tag name   # mvp + control
+.venv/bin/python model/run.py --store model/samples/x lab score --vary vol.use=...
 ```
 
 Tests that read the store skip when it is absent (as in a cloud session).
-A cloud session therefore cannot run the simulation; any task whose "done
-when" needs real results is checked locally before merging.
+The pipeline tests run end to end on the synthetic store (`synthetic.py`),
+which pins the replay results; real results are still checked locally before
+merging.

@@ -94,20 +94,15 @@ pre.mermaid { background: var(--panel); border: 1px solid var(--rule); border-ra
 <nav aria-label="Contents">
   <a href="#bet">1. A bet</a>
   <a href="#cycle">2. One cycle</a>
-  <a href="#edge">3. edge_taker</a>
-  <a href="#direction">4. direction_balanced</a>
-  <a href="#scenario">5. scenario_hedged</a>
-  <a class="sub" href="#risk">The risk model</a>
-  <a class="sub" href="#explore">Scenario explorer</a>
-  <a class="sub" href="#bookcalc">Book calculator</a>
-  <a href="#results">6. Results so far</a>
-  <a href="#code">7. Where the code is</a>
+  <a href="#models">3. The models</a>
+  <a href="#results">4. Results so far</a>
+  <a href="#code">5. Where the code is</a>
 </nav>
 
 <main>
-<div class="eyebrow">poly-options · model/models · 2026-10-20</div>
-<h1>How the three models bet</h1>
-<p class="lede">Three models look at the same Polymarket barrier markets every 15 minutes and decide which bets to buy. They share one signal, the option-implied probability of a touch, and differ only in how they build a book from it. This page explains each rule and lets you try it on your own numbers. The calculators run the same arithmetic as the Python, checked to within 1e-7 on a sample book.</p>
+<div class="eyebrow">poly-options · model/pipeline · revised 2026-11-05</div>
+<h1>How the models bet</h1>
+<p class="lede">Every model looks at the same priced markets of one type each cycle and decides which bets to buy, from offers that already clear its bar. This page explains the rule a bet is judged by and lets you try it on your own numbers. The calculator runs the same arithmetic as <code>models/base.py</code>.</p>
 
 <!-- ============================================================ 1 -->
 <h2 id="bet">1. A bet</h2>
@@ -121,22 +116,22 @@ pre.mermaid { background: var(--panel); border: 1px solid var(--rule); border-ra
 </table></div>
 
 <div class="rule-box">
-<b>How a bet is judged</b> <span class="file">models/bets.py · Bet</span>
+<b>How a bet is judged</b> <span class="file">pipeline/offers.py · Bar, Bet</span>
 <ul>
-<li><b>cost</b> = best ask + Polymarket's fee, <span class="mono">0.04 × min(price, 1 − price)</span> per share.</li>
-<li><b>value</b> = the model's win probability, minus a 2¢ risk premium on a YES (YES touches lost money at every bar in September).</li>
+<li><b>cost</b> = best ask + Polymarket's fee, <span class="mono">0.04 × price × (1 − price)</span> per share.</li>
+<li><b>value</b> = the win probability, minus a 2¢ risk premium on a YES (approved 2026-10-09; INSIGHTS §7.2).</li>
 <li><b>EV</b> = value − cost per share, and <b>ROI</b> = EV ÷ cost.</li>
-<li><b>Bar</b>: a bet clears if EV ≥ 3¢ and ROI ≥ 8%. Above a 90¢ ask the bar is EV ≥ 0 and ROI ≥ 2%, because 3¢ on a 95¢ NO is never on offer.</li>
+<li><b>Bar</b> (today's, <code>TODAYS_BAR</code>; Open in CLAUDE.md): a bet clears if EV ≥ 3¢ and ROI ≥ 8%. Above a 90¢ ask the bar is EV ≥ 0 and ROI ≥ 2%.</li>
 <li><b>Limit</b>: the harness buys deeper levels of the book only while each still clears the bar, so every share bought is a good one. The limit is <span class="mono">min(value − EV bar, value ÷ (1 + ROI bar))</span>.</li>
 </ul></div>
 
 <div class="panel" id="judge">
 <h4>Judge a bet</h4>
-<p class="hint">Starts with a real bet from 09-24: MU hit_down NO at 42.6¢ that the model gave a 55% chance.</p>
+<p class="hint">Starts with a real bet from 09-24: MU hit_down NO at 42.6¢ that the fair gave a 55% chance.</p>
 <div class="controls">
   <label for="j-side">side<select id="j-side"><option>NO</option><option>YES</option></select></label>
   <label for="j-ask">best ask ($)<input id="j-ask" type="number" step="0.01" min="0.01" max="0.99" value="0.426"></label>
-  <label for="j-win">model win probability<input id="j-win" type="number" step="0.01" min="0" max="1" value="0.554"></label>
+  <label for="j-win">win probability<input id="j-win" type="number" step="0.01" min="0" max="1" value="0.554"></label>
 </div>
 <div class="readout">
   <div><span>cost / share</span><b id="j-cost"></b></div>
@@ -150,163 +145,46 @@ pre.mermaid { background: var(--panel); border: 1px solid var(--rule); border-ra
 
 <!-- ============================================================ 2 -->
 <h2 id="cycle">2. One cycle</h2>
-<p>Every 15 minutes the harness replays one snapshot of the books. A model never sees an order book, an API or a ledger. It gets a list of <b>bets on offer</b> (every bet with EV ≥ 0, best ROI first) and its <b>holdings</b>, and it calls <code>take_bet</code> or <code>refuse</code> for each offer.</p>
-<div class="flow" role="img" aria-label="Polymarket books and fair values go to models/market.py, which gives Bets and Holdings to model.decide; its takes are filled by the harness into the portfolio, which feeds the next cycle.">
-  <div>Polymarket books<br>+ option-implied fair values</div><span>→</span>
-  <div><b>models/market.py</b><br>turns them into Bets and Holdings</div><span>→</span>
-  <div><b>model.decide(offers)</b><br>take_bet / refuse</div><span>→</span>
-  <div>harness fills each take<br>against the book</div><span>→</span>
-  <div>portfolio<br><small>(next cycle starts here)</small></div>
-</div>
-<p>The model chooses <b>which</b> bets and <b>up to how much</b>. The harness then applies the rules every model shares:</p>
+<p>Each cycle the replay (<code>replay.py</code>) builds the <b>offers</b>, every bet of the type that clears the model's bar, best return first, each with <code>max_usd</code>, the most of the book that still clears the bar. It hands them to <code>model.decide(offers, book)</code> with the model's <b>book</b> (open and settled holdings, dollars per direction and per vol, the cash its account allows). The model returns orders.</p>
 <div class="rule-box"><ul>
-<li><b>Per-market cap</b>: $150 on a YES market, $500 on a NO market.</li>
-<li><b>Depth</b>: at most half of each price level, and only levels below the bet's limit.</li>
-<li><b>One entry per market</b>: a market already held is never bought again, on either side.</li>
+<li><b>Depth</b>: at most half of each price level, and only levels whose all-in cost is under the bet's limit.</li>
+<li><b>One entry per market</b>: a market already held, or held until it settled, is never offered again.</li>
 <li><b>Minimum</b>: fills under $1 (Polymarket's minimum order) are dropped.</li>
-<li><b>Cash</b>: the $10,000 bankroll. Per-ticker and per-direction caps apply where a model sets them.</li>
+<li><b>Accounts</b> belong to the harness: <code>max</code> (no ceiling, the routine one), <code>compound</code> and <code>budget</code>. There are no per-market caps.</li>
 </ul></div>
-<p>A bet can ask the market <code>bet.quote(usd, limit)</code>, which returns what that much money would actually buy right now after depth and caps. The hedged models use it to size before they commit.</p>
 
 <!-- ============================================================ 3 -->
-<h2 id="edge">3. edge_taker</h2>
-<p class="file">models/edge_taker.py · 12 lines of logic</p>
-<div class="rule-box"><ol>
-<li>Go through the offers, best ROI first.</li>
-<li>Skip any bet that does not clear the bar.</li>
-<li>Take the rest, each up to its per-market cap.</li>
-</ol></div>
-<p>It applies no portfolio rule at all, on purpose. It measures whether the mispricing exists after costs, not whether a sensible book can be built from it. The book it ends up with is lopsided: its average NO cost 36¢, and in the week of 09-21 EWY alone was 42% of the money.</p>
+<h2 id="models">3. The models</h2>
+<p><b>edge_taker</b> (<span class="file">models/edge_taker.py</span>) takes every offer, as large as the book allows. It applies no portfolio rule, on purpose: it measures whether the mispricing exists after costs, not whether a sensible book can be built from it.</p>
+<p><b>random_control</b> (<span class="file">models/random_control.py</span>) has no signal: 12 bets a cycle drawn from every priced bet, at most 2¢ over the best ask. If it earns what edge_taker earns, the window drifted.</p>
+<p>The two hedged books that will balance direction, and direction plus volatility, are the user's to design. Their predecessors <code>direction_balanced</code> and <code>scenario_hedged</code> were deleted on 2026-11-04; git history has them and the earlier version of this page.</p>
 
 <!-- ============================================================ 4 -->
-<h2 id="direction">4. direction_balanced</h2>
-<p class="file">models/direction_balanced.py</p>
-<p>Holds about as much "stock goes up" as "stock goes down", measured in dollars paid.</p>
-<div class="rule-box">
-<b>Slack</b> = the larger of $150 and 10% of everything held.
-<ol>
-<li><b>Edges.</b> Each bet that clears the bar gets up to <span class="mono">min(cap, room)</span>, where room = (dollars on the other lean) + slack − (dollars on its own lean, including this cycle's bets). With room under $1 it is refused.</li>
-<li><b>Hedges.</b> If the book held is lopsided by more than the slack (a side resolved or a market touched), bets on the light lean that clear EV ≥ 0 come in, up to the size that levels the two leans and no further.</li>
-</ol></div>
-<p>The other lean counts at what is <i>held</i>, not at this cycle's bets. Otherwise a bet the harness ends up not filling could make room for a bet on the opposite side.</p>
-<p>What it does not balance is volatility. NO on both sides of a stock leans neither way and still loses on a big move in either direction. This model is the safeguard for direction only.</p>
-
-<div class="panel">
-<h4>Room for one bet</h4>
-<p class="hint">Starts from the book at 18:45Z on 10-06: $476.50 leaning up, $626.50 leaning down.</p>
-<div class="controls">
-  <label for="d-up">held, leaning up ($)<input id="d-up" type="number" step="10" min="0" value="476.50"></label>
-  <label for="d-down">held, leaning down ($)<input id="d-down" type="number" step="10" min="0" value="626.50"></label>
-  <label for="d-lean">this bet leans<select id="d-lean"><option value="down">down</option><option value="up">up</option></select></label>
-  <label for="d-cap">its per-market cap ($)<select id="d-cap"><option value="500">500 (NO)</option><option value="150">150 (YES)</option></select></label>
-</div>
-<div class="readout">
-  <div><span>slack</span><b id="d-slack"></b></div>
-  <div><span>room on its lean</span><b id="d-room"></b></div>
-  <div><span>model asks for</span><b id="d-usd"></b></div>
-  <div><span>imbalance</span><b id="d-gap"></b></div>
-</div>
-<div class="verdict" id="d-verdict"></div>
-</div>
-
-<!-- ============================================================ 5 -->
-<h2 id="scenario">5. scenario_hedged</h2>
-<p class="file">models/scenario_hedged.py</p>
-<p>Keeps the whole book's risk small. It takes the same bets as edge_taker, best ROI first, but each only at the largest size that keeps the book inside two limits:</p>
-<div class="rule-box"><ul>
-<li><b>Spread</b>: the book's standard deviation is at most <b>8%</b> of what is held, with a $50 floor while the book is small.</li>
-<li><b>Worst case</b>: in no scenario does its expected PnL lose more than <b>10%</b> of what is held, with a $50 floor.</li>
-<li>A book that drifted outside a limit (a side resolved, a market touched, the clock ran down) may not drift further. While it is outside, bets that bring it back may come in at EV ≥ 0, each at the size that helps most.</li>
-</ul></div>
-
-<h3 id="risk">The risk model, and why it looks like this</h3>
-<p>The first version of this model moved every stock the same number of sigmas in one direction and limited only the worst case. It made +81% in the week of 09-21 and −12% in another. Going through the bets showed three things it could not see:</p>
-<div class="rule-box"><ol>
-<li><b>Volatility is the shared risk, not direction.</b> Across every market priced from 09-16 to 10-16, touches came in at <b>0.72×</b> the model's rate in the week of 09-21 and <b>1.59×</b> in the week of 10-12. In a calm week every NO wins at once, above the price and below it. The old model counted NO above plus NO below as a hedge of each other.</li>
-<li><b>Bets on one ticker are one bet.</b> EWY hit_up NO at 188, 192, 193 and 194 win or lose together. Counted that way, every week fell within ±1.6 sd of what the bets implied. Counted as independent coin flips, 09-21 looked like a +2.8 sd fluke.</li>
-<li><b>Cheap NO is a lopsided coin.</b> A NO at 36¢ either loses everything or makes +180%. A worst-case limit does not see that spread.</li>
-</ol></div>
-<p>So the model prices every bet in <b>49 scenarios</b>: a volatility multiplier <span class="mono">k</span> (stocks move k times what options priced, log-sd 0.21) times a market drift <span class="mono">μ</span> (in implied sigmas, sd 0.39), each on 7 points out to ±3 sd and weighted by a normal density. Both sizes were fitted on these same five weeks, so treat them as provisional.</p>
-<p>A bet's touch probability in a scenario comes from its own model probability <span class="mono">q</span>. For a random walk <span class="mono">q = 2N(−a)</span>, where a is the barrier's distance in sigmas. In a scenario the distance becomes <span class="mono">(a − μ)/k</span> for an up barrier and <span class="mono">(a + μ)/k</span> for a down one. At k = 1, μ = 0 this gives q back.</p>
-
-<div class="panel" id="explore">
-<h4>Scenario explorer</h4>
-<p class="hint">The touch probability of one barrier in each of the 49 scenarios. Rows: how much stocks move against what options priced. Columns: which way the market drifted.</p>
-<div class="controls">
-  <label for="x-q">model touch probability: <span id="x-qv" class="mono"></span><input id="x-q" type="range" min="0.02" max="0.95" step="0.01" value="0.30"></label>
-  <label for="x-kind">barrier<select id="x-kind"><option value="hit_up">hit_up (above)</option><option value="hit_down">hit_down (below)</option></select></label>
-  <label for="x-show">show<select id="x-show"><option value="touch">touch probability</option><option value="NO">NO win probability</option><option value="YES">YES win probability</option><option value="w">scenario weight</option></select></label>
-</div>
-<div class="scroll"><div class="heat" id="x-heat"></div></div>
-<p class="note">Read the centre cell (k = 1.00, μ = 0) as the model's own view. The top row is a calm week like 09-21 (k ≈ 0.53 at −3 sd), and the bottom row is a wild one.</p>
-</div>
-
-<h3>The book's spread</h3>
-<p>The standard deviation adds two variances. <b>Across</b>: how much the book's expected PnL differs between scenarios, weighted by how likely each scenario is. This is the shared risk. <b>Within</b>: the coin flips left once the scenario is known. Per ticker × type × side, the spreads <span class="mono">shares × √(p(1−p))</span> are added up and then squared, because bets in one cluster move together.</p>
-
-<div class="panel" id="bookcalc">
-<h4>Book calculator</h4>
-<p class="hint">Starts from four real bets of the week of 09-21, the week that made +81%. Change any number, or add a candidate to see how much of it the model would take.</p>
-<div class="scroll"><table class="book">
-<thead><tr><th>ticker</th><th>barrier</th><th>side</th><th class="n">cost/share</th><th class="n">model touch q</th><th class="n">$ held</th><th></th></tr></thead>
-<tbody id="b-rows"></tbody>
-</table></div>
-<button id="b-add" type="button">Add a holding</button>
-<div class="readout" style="margin-top:14px">
-  <div><span>held</span><b id="b-held"></b></div>
-  <div><span>spread (sd)</span><b id="b-sd"></b><div class="bar" id="b-sdbar"><i></i></div></div>
-  <div><span>worst scenario</span><b id="b-worst"></b><div class="bar" id="b-wbar"><i></i></div></div>
-  <div><span>expected PnL</span><b id="b-mean"></b></div>
-</div>
-<div class="verdict" id="b-verdict"></div>
-
-<h4 style="margin-top:20px">A candidate bet</h4>
-<div class="controls">
-  <label for="c-ticker">ticker<input id="c-ticker" value="AAPL"></label>
-  <label for="c-kind">barrier<select id="c-kind"><option value="hit_up">hit_up</option><option value="hit_down">hit_down</option></select></label>
-  <label for="c-side">side<select id="c-side"><option>NO</option><option>YES</option></select></label>
-  <label for="c-cost">cost / share<input id="c-cost" type="number" step="0.01" value="0.93"></label>
-  <label for="c-q">model touch q<input id="c-q" type="number" step="0.01" value="0.04"></label>
-  <label for="c-usd">size the book offers ($)<input id="c-usd" type="number" step="10" value="500"></label>
-</div>
-<div class="verdict" id="c-verdict"></div>
-</div>
-
-<!-- ============================================================ 6 -->
-<h2 id="results">6. Results so far</h2>
-<p>Bets made 09-16 to 10-16, replayed against the stored books. Open positions are marked at today's ask, and weeks are by the Monday the bet was made.</p>
+<h2 id="results">4. Results so far</h2>
+<p>Bets made 09-16 to 10-16 under the code before the 2026-11-04 refactor (the Monte Carlo fair, the min/max rule, $150 / $500 per-market caps), replayed against the stored books; open positions marked at the ask of 10-16. Not reproducible with the current code.</p>
 <div class="scroll"><table>
 <tr><th>model</th><th class="n">bet</th><th class="n">PnL</th><th class="n">ROI</th><th class="n">wk 09-14</th><th class="n">09-21</th><th class="n">09-28</th><th class="n">10-05</th><th class="n">10-12</th></tr>
 <tr><td>edge_taker</td><td class="n">$27,710</td><td class="n">+$6,130</td><td class="n">+22%</td><td class="n">+24%</td><td class="n">+48%</td><td class="n">+6%</td><td class="n">+15%</td><td class="n">−6%</td></tr>
-<tr><td>direction_balanced</td><td class="n">$17,278</td><td class="n">+$4,580</td><td class="n">+27%</td><td class="n">+46%</td><td class="n">+70%</td><td class="n">−1%</td><td class="n">+19%</td><td class="n">−19%</td></tr>
-<tr><td>scenario_hedged</td><td class="n">$3,261</td><td class="n">+$295</td><td class="n">+9%</td><td class="n">+6%</td><td class="n">+19%</td><td class="n">+12%</td><td class="n">+10%</td><td class="n">−1%</td></tr>
 <tr><td>random_control</td><td class="n">$21,872</td><td class="n">−$375</td><td class="n">−2%</td><td class="n">−1%</td><td class="n">−4%</td><td class="n">−2%</td><td class="n">+8%</td><td class="n">−18%</td></tr>
 </table></div>
-<div class="rule-box">
-<b>Before trusting any of this</b>
-<ul>
-<li>scenario_hedged is steady because it is small. Its limit cuts exactly where the edge is (cheap NO clustered on a few tickers), and the bet that would let size back in, a YES that pays in a wild week, rarely clears EV ≥ 0. Looser limits trade steadiness for size: at 25%, $16.1k bet, +$2,204, and a +50% week.</li>
-<li>Only part of the fills are confirmed, meaning the quote was still there when rechecked. edge_taker's confirmed-only PnL is about +$190 of the +$6,130.</li>
-<li>Five weeks, one of them calm. The risk model's two factor sizes were fitted on the same weeks.</li>
-</ul></div>
+<p class="note">Five weeks, one of them calm. That this shows an edge is a takeaway <i>(unapproved)</i>.</p>
 
-<!-- ============================================================ 7 -->
-<h2 id="code">7. Where the code is</h2>
+<!-- ============================================================ 5 -->
+<h2 id="code">5. Where the code is</h2>
 <div class="scroll"><table>
 <tr><th>file</th><th>what it holds</th></tr>
-<tr><td class="mono">model/models/bets.py</td><td>The vocabulary: <code>Bet</code>, <code>Holding</code>, <code>Take</code>, and the <code>Model</code> base class with <code>take_bet</code>, <code>refuse</code>, <code>holdings</code> and <code>taken</code>, the list of every bet a model ever chose. No Polymarket code.</td></tr>
-<tr><td class="mono">model/models/edge_taker.py</td><td>Section 3.</td></tr>
-<tr><td class="mono">model/models/direction_balanced.py</td><td>Section 4.</td></tr>
-<tr><td class="mono">model/models/scenario_hedged.py</td><td>Section 5: the scenarios, the <code>Book</code>, the limits, <code>decide</code>.</td></tr>
-<tr><td class="mono">model/models/market.py</td><td>The only bridge to the harness. Books and fair values become <code>Bet</code>s and <code>Holding</code>s, and takes become orders.</td></tr>
-<tr><td class="mono">model/sim.py</td><td>The harness: the signal (<code>candidate_edges</code>), filling against books, caps, settlement, reports.</td></tr>
+<tr><td class="mono">model/pipeline/*.py</td><td>One module per decision step (markets, inputs, vol, prob, gates, fee and bar in <code>offers.py</code>, sizing, fills, accounts, settle), each with named variants.</td></tr>
+<tr><td class="mono">model/configs/*.yaml</td><td>One variant per step: <code>mvp.yaml</code>, <code>control.yaml</code>, and extensions.</td></tr>
+<tr><td class="mono">model/replay.py</td><td>Runs a config cycle by cycle: price, settle, offer, decide, fill.</td></tr>
+<tr><td class="mono">model/reporting/results.py</td><td>Promised EV against realised PnL, reports, ledgers.</td></tr>
+<tr><td class="mono">model/lab.py</td><td>Score or sweep one step on a sample.</td></tr>
+<tr><td class="mono">model/run.py</td><td>The one command.</td></tr>
 </table></div>
-<p class="note">The 2026-10-20 restructure into these classes was checked by replaying 09-16 to 10-19 with the old and new code. All three models produced the same fills, identical to the last bit. One difference had first shown up and was traced to Python's compensated <code>sum()</code> deciding a book that was exactly $150 lopsided against a $150 slack. The new code now sums the same way.</p>
 </main>
 </div>
 
 <script>
-// The models' arithmetic, ported from model/models/*.py for the explainer.
+// The bar's arithmetic, ported from model/pipeline/offers.py for the explainer.
 // Every function names the Python it mirrors.
 
 // --- normal distribution (statistics.NormalDist in Python) ---
@@ -331,9 +209,9 @@ function Ninv(p) {                      // Acklam's inverse normal, |rel error| 
   return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1);
 }
 
-// --- bets.py ---
+// --- pipeline/offers.py: Bar ---
 const YES_PREMIUM = 0.02, FEE = 0.04, DEAR = 0.90;
-const allInCost = ask => ask + FEE * Math.min(ask, 1 - ask);
+const allInCost = ask => ask + FEE * ask * (1 - ask);
 function judge({ ask, winProb, side, minEv = 0.03, minRoi = 0.08 }) {
   const cost = allInCost(ask);
   const value = winProb - (side === "YES" ? YES_PREMIUM : 0);
@@ -344,82 +222,7 @@ function judge({ ask, winProb, side, minEv = 0.03, minRoi = 0.08 }) {
   return { cost, value, ev, roi, dear, evBar, roiBar, clears: ev >= evBar && roi >= roiBar, limit };
 }
 const leanOf = (kind, side) => ((kind === "hit_up") === (side === "YES")) ? "up" : "down";
-
-// --- direction_balanced.py ---
-function directionRoom({ up, down, lean, cap, slackFloor = 150, frac = 0.10 }) {
-  const slack = Math.max(slackFloor, frac * (up + down));
-  const other = lean === "up" ? down : up, mine = lean === "up" ? up : down;
-  const room = other + slack - mine;
-  const lopsided = Math.abs(up - down) > slack;
-  return { slack, room, usd: Math.max(0, Math.min(cap, room)), refused: room < 1,
-           hedging: lopsided, light: up < down ? "up" : "down", gap: Math.abs(up - down) };
-}
-
-// --- scenario_hedged.py ---
-const GRID = [-3, -2, -1, 0, 1, 2, 3];
-const VOL_LOG_SD = 0.21, DRIFT_SD = 0.39;
-function axisWeights() {
-  const mids = GRID.slice(1).map((g, i) => (g + GRID[i]) / 2);
-  const cdf = [0, ...mids.map(Ncdf), 1];
-  return GRID.map((_, i) => cdf[i + 1] - cdf[i]);
-}
-const AW = axisWeights();
-const K = [], MU = [], W = [];
-GRID.forEach((gk, i) => GRID.forEach((gm, j) => { K.push(Math.exp(gk * VOL_LOG_SD)); MU.push(gm * DRIFT_SD); W.push(AW[i] * AW[j]); }));
-
-function touchProbs(q, up) {
-  q = Math.min(Math.max(q, 1e-6), 1 - 1e-6);
-  const a = -Ninv(q / 2);
-  return K.map((k, s) => {
-    const dist = up ? a - MU[s] : a + MU[s];
-    return Math.min(1, Math.max(0, 2 * Ncdf(-Math.max(dist, 0) / k)));
-  });
-}
-function winProbs(q, kind, side) {
-  const t = touchProbs(q, kind === "hit_up");
-  return side === "YES" ? t : t.map(x => 1 - x);
-}
-const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
-
-function emptyBook() { return { pnl: new Array(W.length).fill(0), clusters: {}, held: 0 }; }
-function plus(book, cluster, shares, cost, wins, p, t = 1) {
-  const clusters = { ...book.clusters };
-  clusters[cluster] = (clusters[cluster] || 0) + t * shares * Math.sqrt(p * (1 - p));
-  return { pnl: book.pnl.map((x, s) => x + t * (shares * wins[s] - cost)), clusters, held: book.held + t * cost };
-}
-function sd(book) {
-  const mean = dot(W, book.pnl);
-  const across = dot(W, book.pnl.map(x => (x - mean) ** 2));
-  const within = Object.values(book.clusters).reduce((s, c) => s + c * c, 0);
-  return Math.sqrt(across + within);
-}
-const worst = book => Math.min(...book.pnl);
-const LIM = { lossFloor: 50, lossFrac: 0.10, sdFloor: 50, sdFrac: 0.08 };
-const budget = held => Math.max(LIM.lossFloor, LIM.lossFrac * held);
-const sdLimit = held => Math.max(LIM.sdFloor, LIM.sdFrac * held);
-function violation(book) {
-  return Math.max(0, -worst(book) - budget(book.held)) + Math.max(0, sd(book) - sdLimit(book.held));
-}
-function largestFraction(book, cluster, shares, cost, wins, p) {
-  const allowed = violation(book) + 1e-9;
-  const ok = t => violation(plus(book, cluster, shares, cost, wins, p, t)) <= allowed;
-  if (ok(1)) return 1;
-  let lo = 0, hi = 1;
-  for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; if (ok(mid)) lo = mid; else hi = mid; }
-  return lo;
-}
-// A bet as the calculator holds it: usd at an all-in cost per share.
-function addBet(book, b, t = 1) {
-  const wins = winProbs(b.q, b.kind, b.side);
-  const p = dot(W, wins);
-  return plus(book, `${b.ticker}|${b.kind}|${b.side}`, b.usd / b.cost, b.usd, wins, p, t);
-}
-function fractionFor(book, b) {
-  const wins = winProbs(b.q, b.kind, b.side);
-  return largestFraction(book, `${b.ticker}|${b.kind}|${b.side}`, b.usd / b.cost, b.usd, wins, dot(W, wins));
-}
-if (typeof module !== "undefined") module.exports = { judge, directionRoom, touchProbs, winProbs, K, MU, W, emptyBook, addBet, fractionFor, sd, worst, violation, budget, sdLimit };
-
+if (typeof module !== "undefined") module.exports = { judge };
 </script>
 <script>
 const $ = id => document.getElementById(id);
@@ -438,100 +241,11 @@ function renderJudge() {
   v.className = "verdict " + (r.clears ? "ok" : "bad");
   v.textContent = r.clears
     ? `Clears the bar (EV ≥ ${cents(r.evBar)}, ROI ≥ ${pct(r.roiBar, 0)}${r.dear ? ", the dear-price bar" : ""}). Deeper levels are bought while they cost under ${cents(r.limit)} all-in.`
-    : `Below the bar: needs EV ≥ ${cents(r.evBar)} and ROI ≥ ${pct(r.roiBar, 0)}${r.dear ? " (the dear-price bar)" : ""}. Only a hedge pass at EV ≥ 0 could take it${r.ev >= 0 ? ", and it would qualify" : ", and it would not"}.`;
+    : `Below the bar: needs EV ≥ ${cents(r.evBar)} and ROI ≥ ${pct(r.roiBar, 0)}${r.dear ? " (the dear-price bar)" : ""}.`;
 }
 ["j-side", "j-ask", "j-win"].forEach(id => $(id).addEventListener("input", renderJudge));
 
-// ---- 4. direction room
-function renderDirection() {
-  const r = directionRoom({ up: +$("d-up").value, down: +$("d-down").value, lean: $("d-lean").value, cap: +$("d-cap").value });
-  $("d-slack").textContent = usd(r.slack, 2); $("d-room").textContent = usd(r.room, 2);
-  $("d-usd").textContent = r.refused ? "refused" : usd(r.usd, 2); $("d-gap").textContent = usd(r.gap, 2);
-  const v = $("d-verdict");
-  const pass1 = r.refused ? "Pass 1 refuses it: no room left on its lean." : `Pass 1 asks for up to ${usd(r.usd, 2)}.`;
-  const pass2 = r.hedging ? ` The book is lopsided past the slack, so pass 2 also buys ${r.light}-leaning bets at EV ≥ 0, up to ${usd(r.gap, 2)}.`
-                          : " The book is within the slack, so pass 2 does nothing.";
-  v.className = "verdict " + (r.refused ? "bad" : "ok"); v.textContent = pass1 + pass2;
-}
-["d-up", "d-down", "d-lean", "d-cap"].forEach(id => $(id).addEventListener("input", renderDirection));
-
-// ---- 5a. scenario explorer
-function renderExplore() {
-  const q = +$("x-q").value; $("x-qv").textContent = pct(q, 0);
-  const kind = $("x-kind").value, show = $("x-show").value;
-  const vals = show === "w" ? W : show === "touch" ? touchProbs(q, kind === "hit_up") : winProbs(q, kind, show);
-  const grid = [-3, -2, -1, 0, 1, 2, 3];
-  let html = `<div class="h">k \\ μ</div>` + grid.map(g => `<div class="h">${(g * 0.39).toFixed(2)}</div>`).join("");
-  grid.forEach((gk, i) => {
-    html += `<div class="h">${Math.exp(gk * 0.21).toFixed(2)}</div>`;
-    grid.forEach((_, j) => {
-      const s = i * 7 + j, x = vals[s];
-      const a = show === "w" ? Math.min(1, x / 0.16) : x;
-      const centre = i === 3 && j === 3 ? "outline:2px solid var(--ink);outline-offset:-2px;" : "";
-      html += `<div class="c" style="background:color-mix(in srgb, var(--accent) ${Math.round(a * 70)}%, var(--panel));${centre}">${show === "w" ? (x * 100).toFixed(1) : Math.round(x * 100)}</div>`;
-    });
-  });
-  $("x-heat").innerHTML = html;
-}
-["x-q", "x-kind", "x-show"].forEach(id => $(id).addEventListener("input", renderExplore));
-
-// ---- 5b. book calculator
-const rows = [
-  { ticker: "TSLA", kind: "hit_down", side: "NO", cost: 0.358, q: 0.601, usd: 236 },
-  { ticker: "EWY",  kind: "hit_up",   side: "NO", cost: 0.290, q: 0.682, usd: 168 },
-  { ticker: "META", kind: "hit_up",   side: "NO", cost: 0.236, q: 0.735, usd: 125 },
-  { ticker: "MU",   kind: "hit_down", side: "NO", cost: 0.436, q: 0.446, usd: 256 },
-];
-function rowHtml(r, i) {
-  const sel = (name, opts, v) => `<select data-i="${i}" data-k="${name}" aria-label="${name}">${opts.map(o => `<option${o === v ? " selected" : ""}>${o}</option>`).join("")}</select>`;
-  const num = (name, v, step) => `<input data-i="${i}" data-k="${name}" type="number" step="${step}" value="${v}" aria-label="${name}">`;
-  return `<tr><td><input data-i="${i}" data-k="ticker" value="${r.ticker}" aria-label="ticker" style="width:64px"></td>
-    <td>${sel("kind", ["hit_up", "hit_down"], r.kind)}</td><td>${sel("side", ["NO", "YES"], r.side)}</td>
-    <td class="n">${num("cost", r.cost, 0.01)}</td><td class="n">${num("q", r.q, 0.01)}</td><td class="n">${num("usd", r.usd, 10)}</td>
-    <td><button type="button" data-del="${i}" aria-label="remove">×</button></td></tr>`;
-}
-function bookNow() { let b = emptyBook(); rows.forEach(r => { if (r.usd > 0 && r.cost > 0 && r.cost < 1) b = addBet(b, r); }); return b; }
-function renderBook() {
-  $("b-rows").innerHTML = rows.map(rowHtml).join("");
-  renderBookNumbers();
-}
-function renderBookNumbers() {
-  const b = bookNow(), s = sd(b), w = worst(b), mean = W.reduce((t, x, i) => t + x * b.pnl[i], 0);
-  const sL = sdLimit(b.held), wL = budget(b.held);
-  $("b-held").textContent = usd(b.held);
-  $("b-sd").textContent = `${usd(s)} · ${b.held ? pct(s / b.held, 0) : "–"}`;
-  $("b-worst").textContent = `${sgn(w)} · ${b.held ? pct(w / b.held, 0) : "–"}`;
-  $("b-mean").textContent = sgn(mean);
-  const setBar = (id, v, lim) => { const el = $(id); el.classList.toggle("over", v > lim); el.firstElementChild.style.width = Math.min(100, 100 * v / (2 * lim)) + "%"; };
-  setBar("b-sdbar", s, sL); setBar("b-wbar", Math.max(0, -w), wL);
-  const v = $("b-verdict"), out = violation(b);
-  v.className = "verdict " + (out > 0 ? "bad" : "ok");
-  v.textContent = out > 0
-    ? `Outside the limits by ${usd(out)} (sd limit ${usd(sL)}, worst-case limit ${usd(-wL)}). The model would add nothing that makes this worse, and would look for EV ≥ 0 hedges that bring it back. Bars show the limit at the halfway mark.`
-    : `Inside both limits (sd limit ${usd(sL)}, worst-case limit ${usd(-wL)}). Bars show the limit at the halfway mark.`;
-  renderCandidate(b);
-}
-function renderCandidate(b) {
-  const c = { ticker: $("c-ticker").value || "X", kind: $("c-kind").value, side: $("c-side").value,
-              cost: +$("c-cost").value, q: +$("c-q").value, usd: +$("c-usd").value };
-  const v = $("c-verdict");
-  if (!(c.cost > 0 && c.cost < 1 && c.usd > 0)) { v.className = "verdict bad"; v.textContent = "Enter a cost between 0 and 1 and a positive size."; return; }
-  const t = fractionFor(b, c), after = addBet(b, c, t);
-  const take = t * c.usd;
-  v.className = "verdict " + (take >= 1 ? "ok" : "bad");
-  v.textContent = take >= 1
-    ? `The model would take ${pct(t, 0)} of it, ${usd(take, 2)}. Book after: sd ${usd(sd(after))} (${pct(sd(after) / after.held, 0)} of ${usd(after.held)} held), worst scenario ${sgn(worst(after))}.`
-    : `The model would take none of it (under the $1 minimum): any amount pushes the book further outside its limits.`;
-}
-$("b-rows").addEventListener("input", e => {
-  const el = e.target, i = +el.dataset.i, k = el.dataset.k; if (!k) return;
-  rows[i][k] = ["cost", "q", "usd"].includes(k) ? +el.value : el.value; renderBookNumbers();
-});
-$("b-rows").addEventListener("click", e => { const i = e.target.dataset.del; if (i !== undefined) { rows.splice(+i, 1); renderBook(); } });
-$("b-add").addEventListener("click", () => { rows.push({ ticker: "SPY", kind: "hit_down", side: "NO", cost: 0.93, q: 0.05, usd: 200 }); renderBook(); });
-["c-ticker", "c-kind", "c-side", "c-cost", "c-q", "c-usd"].forEach(id => $(id).addEventListener("input", () => renderCandidate(bookNow())));
-
-renderJudge(); renderDirection(); renderExplore(); renderBook();
+renderJudge();
 </script>
 
 </body>

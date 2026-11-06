@@ -38,9 +38,7 @@ def sessions_remaining(point_times: np.ndarray, deadlines: np.ndarray,
 
     The session a point falls inside counts only for the part still to come: a
     point at 15:00 ET has 0.15 of that session left. An integer result means
-    the point sits outside a session, so the next session begins with an
-    overnight gap - which is exactly the distinction the Monte Carlo in
-    `fair.touch_probability` needs.
+    the point sits outside a session.
     """
     sess = nyse_sessions() if sess is None else sess
     opens = sess["open"].values.astype("datetime64[ns]").astype(np.int64)

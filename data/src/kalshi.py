@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from config import markets_cfg
 from storage import raw_enabled, write_meta, write_raw, write_raw_once, write_table
-from util import Http, get_logger, parallel_map, utc_iso
+from util import Http, get_logger, now_utc, parallel_map, utc_iso
 
 log = get_logger("kalshi")
 
@@ -112,6 +112,43 @@ def fetch_markets(http: Http, series_ticker: str, cycle_id: str) -> list[dict]:
             break
 
     return rows
+
+
+def collect_resolutions(http: Http, cycle_id: str, days_back: int = 10) -> int:
+    """Final results of markets that closed in the last `days_back` days.
+
+    `collect` only sees open markets, so a result never reaches `kalshi_markets`.
+    Repeats across runs are expected; readers take a ticker's first row.
+    """
+    cfg = markets_cfg()["kalshi"]
+    since = int(now_utc().timestamp()) - days_back * 86400
+    fetched_at = utc_iso()
+    rows: list[dict] = []
+    for series in all_series():
+        cursor: str | None = None
+        page = 0
+        while True:
+            params = {"series_ticker": series, "status": "settled", "limit": 1000,
+                      "min_close_ts": since}
+            if cursor:
+                params["cursor"] = cursor
+            payload = http.get(f"{cfg['base']}/markets", venue="kalshi",
+                               identifier=f"settled_{series}_p{page}", params=params)
+            if not payload:
+                break
+            rows += [{"series_ticker": series, "ticker": m.get("ticker"),
+                      "result": m.get("result"),
+                      "expiration_value": _f(m.get("expiration_value")),
+                      "close_time": m.get("close_time"),
+                      "settled_at_utc": m.get("settlement_ts"),
+                      "fetched_at_utc": fetched_at}
+                     for m in payload.get("markets") or []]
+            cursor = payload.get("cursor")
+            page += 1
+            if not cursor or not payload.get("markets"):
+                break
+    write_table("kalshi_resolutions", rows, partition_date=fetched_at[:10])
+    return len(rows)
 
 
 def fetch_orderbook(http: Http, market: dict, cycle_id: str) -> tuple[list[dict], dict | None]:
