@@ -1,54 +1,79 @@
-"""The bets record: rows are only added, and the book is rebuilt from them alone."""
+"""BETS.md: rows are only added, on main, whatever is checked out."""
 from __future__ import annotations
+
+import subprocess
 
 import pandas as pd
 import pytest
 
 import record_bets as rb
-import sim
+import replay
+
+HEADER = "# Bets\n\n| Written | Book | Deadline | Market ID | Market |\n|---|---|---|---|---|\n"
 
 
-def _row(market_id="m1", side="NO", cost="100.0"):
-    return {"market_id": market_id, "side": side, "ticker": "META", "kind": "hit_up",
-            "barrier": "800", "deadline_utc": "2026-11-13T21:00:00+00:00",
-            "cycle_id": "20261106T150005Z-aaaaaa",
-            "book_seen_at_utc": "2026-11-06T15:00:10+00:00", "fair_source": "x",
-            "shares": "120", "cost_usd": cost, "fee_usd": "1.0"}
+def _position():
+    when = pd.Timestamp("2026-11-06T15:00:00Z")
+    p = replay.Position(market_id="m1", side="NO", ticker="META", contract_type="hit_up",
+                        level=640.0, deadline=when, period="weekly", direction="down", vol="calm",
+                        entry_cycle_id="c", entry_at=when, win_prob=0.9, shares=10.0,
+                        cost_usd=8.0, ev_usd=1.0)
+    p.fills.append(replay.Fill("c", when, 0, 0.8, 10.0, 0.0, 8.0, 1.0, 20.0))
+    return p
 
 
-def test_appending_keeps_every_earlier_row_and_one_header(tmp_path):
-    path = tmp_path / "bets" / "2026-11-06.csv"
-    rb.append_rows(path, ["a", "b"], [{"a": 1, "b": 2}])
-    first = path.read_text()
-    rb.append_rows(path, ["a", "b"], [{"a": 3, "b": 4}])
-    assert path.read_text().startswith(first)
-    assert rb.read_rows(path) == [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}]
+def test_a_written_row_gives_back_its_market_id():
+    row = rb.table_row(_position(), pd.Timestamp("2026-11-06T15:05:00Z"), "abc", "Hit $640?")
+    assert rb.market_ids(HEADER + row) == {"m1"}
+    assert "2026-11-06 15:05:00" in row and "| NO |" in row and "| 90.0% |" in row
 
 
-def test_nothing_to_append_creates_no_file(tmp_path):
-    path = tmp_path / "bets" / "x.csv"
-    rb.append_rows(path, ["a"], [])
-    assert not path.exists()
+def test_a_pipe_in_a_question_cannot_shift_the_columns():
+    row = rb.table_row(_position(), pd.Timestamp("2026-11-06T15:05:00Z"), "abc", "a | b")
+    assert rb.market_ids(row) == {"m1"}
 
 
-def test_book_from_record_holds_the_bets_and_spends_the_cash():
-    book = rb.book_from_record([_row(), _row("m2", "YES", "50.0")], sim.Params())
-    assert book.cash == pytest.approx(9_850.0)
-    assert set(book.open) == {("m1", sim.NO), ("m2", sim.YES)}
-    assert book.open[("m1", sim.NO)].shares == 120.0
+def test_the_header_is_not_read_as_a_market():
+    assert rb.market_ids(HEADER) == set()
 
 
-def test_a_held_market_is_not_bought_again():
-    book = rb.book_from_record([_row()], sim.Params())
-    assert book.held_direction("m1") == sim.NO
+@pytest.fixture
+def repo(tmp_path):
+    def run(*args):
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
+    run("init", "-q", "-b", "main")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (tmp_path / rb.BETS).write_text(HEADER)
+    run("add", rb.BETS)
+    run("commit", "-q", "-m", "start")
+    return tmp_path
 
 
-def test_a_ticker_with_stale_bars_is_left_out():
+def test_appending_on_main_from_main_keeps_the_checkout_clean(repo):
+    rb.append_to_main(repo, "| 2026 | row |\n", "one")
+    assert (repo / rb.BETS).read_text() == HEADER + "| 2026 | row |\n"
+    assert rb.git(repo, "status", "--porcelain") == ""
+
+
+def test_appending_leaves_another_branch_and_its_staged_work_alone(repo):
+    rb.git(repo, "checkout", "-q", "-b", "work")
+    (repo / "other.txt").write_text("staged")
+    rb.git(repo, "add", "other.txt")
+    rb.append_to_main(repo, "| 2026 | row |\n", "one")
+    rb.append_to_main(repo, "| 2026 | two |\n", "two")
+    assert rb.read_main(repo) == HEADER + "| 2026 | row |\n| 2026 | two |\n"
+    assert (repo / rb.BETS).read_text() == HEADER
+    assert rb.git(repo, "branch", "--show-current") == "work"
+    assert rb.git(repo, "diff", "--cached", "--name-only") == "other.txt"
+
+
+def test_a_ticker_with_stale_bars_is_behind():
     stamp = pd.Timestamp("2026-11-06T15:00:00Z")
     today = pd.DataFrame({"symbol": ["META", "AAPL"],
                           "bar_time": [stamp - pd.Timedelta(minutes=5),
                                        stamp - pd.Timedelta(minutes=30)]})
-    assert rb.tickers_covered(today, ["META", "AAPL", "MSFT"], stamp) == ["META"]
+    assert rb.tickers_behind(today, ["META", "AAPL", "MSFT"], stamp) == ["AAPL", "MSFT"]
 
 
 def test_todays_bars_win_an_overlap_with_the_store():

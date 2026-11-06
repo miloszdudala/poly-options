@@ -1,123 +1,129 @@
-"""Record edge_taker's Polymarket weekly hit bets at the moment they are decided.
+"""Add the `mvp` config's bets to BETS.md at the moment they are decided.
 
     .venv/bin/python model/record_bets.py
 
-Run by launchd every five minutes (`scheduling/com.polyoptions.recordbets.plist`).
-It does nothing unless the collector has finished a new session cycle. For that
-cycle it prices the books, runs the model, appends the result to a separate git
-repository, commits and pushes. The push time is the proof: GitHub stamps it,
-and it comes before the market resolves.
+Run by launchd every five minutes. It does nothing unless the collector has
+finished a new session cycle. A cycle with bets adds rows to the end of
+`BETS.md` on `main`, commits and pushes; a cycle without bets commits nothing.
 
-The record is the opposite of `model/store/ledger`, which is rebuilt from
-scratch every night by the current code:
+BETS.md outlives everything else in this repo. It depends on no other file, and
+only its market IDs are read back, so a market is not bet on twice. Replace this
+script freely when the code is rebuilt, as long as rows are only ever added.
 
-* Rows are only ever added. A later change of rules cannot alter them, and a
-  rerun of the simulation does not read or write them.
-* A missed cycle stays missed. Only the newest cycle is recorded, and only
-  while its books are fresh, so a laptop that slept leaves a visible gap.
-* What the book holds comes from the record itself, not from the simulation.
+The commit goes straight onto `main` without touching the checkout, so the
+record keeps going whatever branch is checked out.
 
-Same pricing, model, caps and fill rules as the simulation, with one difference
-the session forces: the collector fetches 5-minute bars after the close, so this
-fetches today's bars itself, in memory. Without them today's touches are
-invisible (`daily.bars_cover`). A ticker whose bars have not reached the cycle
-is left out of that cycle. Nothing here writes to `data/store` or `model/store`,
-so the simulation's results cannot move.
+The pricing is the replay's, with one difference the session forces: the
+collector fetches 5-minute bars after the close, so this fetches today's bars
+itself, in memory. Without them today's touches are invisible. A ticker whose
+bars have not reached the cycle is left out of it. Nothing is written to the
+stores, so simulation results cannot move.
 """
 from __future__ import annotations
 
-import csv
-import datetime as dt
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
 sys.path.insert(0, str(HERE))
-sys.path.append(str(HERE.parent / "data" / "src"))   # see model/data.py
+sys.path.append(str(REPO / "data" / "src"))   # see store.py
 
-import data  # noqa: E402
-import sim  # noqa: E402
+import store  # noqa: E402
+import pipeline  # noqa: E402,F401  (registers the step variants)
+import replay  # noqa: E402
 from config import underlyings  # noqa: E402
-from engine import price_cycle  # noqa: E402
-from models.edge_taker import EdgeTaker  # noqa: E402
+from pipeline import config as configs, markets as markets_step  # noqa: E402
+from pipeline.core import Cycle, NotReady, price  # noqa: E402
+from pipeline.inputs import BARS_LAG  # noqa: E402
+from pipeline.offers import Bar, make_offers  # noqa: E402
+from pipeline.sizing import Book  # noqa: E402
 
-BETS_REPO = HERE.parent.parent / "poly-options-bets"
-TYPE = "poly-hit-weekly-stock"
-STOCK_TIERS = ("tier1", "tier2")
-PERIOD = "weekly"
-MAX_BOOK_AGE = pd.Timedelta(minutes=15)   # older than the next cycle: no longer a live decision
-BARS_LAG = pd.Timedelta(minutes=10)       # as daily.BARS_LAG: bars are stamped at their start
-
-BET_COLUMNS = ["recorded_at_utc", "cycle_id", "book_seen_at_utc", "model", "type", "code",
-               "market_id", "question", "ticker", "kind", "barrier", "deadline_utc", "side",
-               "shares", "avg_price", "cost_usd", "fee_usd", "best_ask", "limit_cost",
-               "win_prob", "value_per_share", "ev_usd", "roi", "fair_source", "spot"]
-CYCLE_COLUMNS = ["recorded_at_utc", "cycle_id", "book_seen_at_utc", "model", "type", "code",
-                 "markets_priced", "tickers_left_out", "offers_clearing_bar", "bets", "cash_usd"]
+CONFIG = "mvp"
+BETS = "BETS.md"
+LAST_CYCLE = HERE / "store" / "record_last_cycle"      # not in git
+MAX_BOOK_AGE = pd.Timedelta(minutes=15)                # by then the next cycle has begun
+MARKET_ID_COLUMN = 3
 
 
-def stocks() -> list[str]:
-    return [u.symbol for u in underlyings() if u.tier in STOCK_TIERS]
+# ------------------------------------------------------------------ the table
 
 
-# ---------------------------------------------------------------- the record
+def table_row(p: replay.Position, written_at: str, code: str, question: str) -> str:
+    cells = [_stamp(written_at), _stamp(p.entry_at), _stamp(p.deadline), p.market_id,
+             question.replace("|", "/"), p.side, f"{p.shares:.2f}",
+             f"{sum(f.price * f.shares for f in p.fills) / p.shares:.3f}", f"{p.cost_usd:.2f}",
+             f"{p.win_prob:.1%}", f"{p.ev_usd:.2f}", code]
+    return "| " + " | ".join(cells) + " |\n"
 
 
-def read_rows(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    with path.open(newline="") as handle:
-        return list(csv.DictReader(handle))
+def _stamp(when) -> str:
+    return pd.Timestamp(when).tz_convert("UTC").strftime("%Y-%m-%d %H:%M:%S")
 
 
-def append_rows(path: Path, columns: list[str], rows: list[dict]) -> None:
-    """Add rows to the end of a CSV. There is deliberately no way to edit one."""
-    if not rows:
+def market_ids(text: str) -> set[str]:
+    """The markets already bet on, read from the table's rows."""
+    rows = [line.split("|")[1:-1] for line in text.splitlines() if line.startswith("| 20")]
+    return {row[MARKET_ID_COLUMN].strip() for row in rows}
+
+
+# ------------------------------------------------------------------------ git
+
+
+def git(repo: Path, *args: str, stdin: str | None = None, env: dict | None = None) -> str:
+    done = subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                          text=True, input=stdin, env={**os.environ, **(env or {})})
+    return done.stdout.strip()
+
+
+def read_main(repo: Path) -> str:
+    return subprocess.run(["git", "-C", str(repo), "show", f"main:{BETS}"], check=True,
+                          capture_output=True, text=True).stdout
+
+
+def append_to_main(repo: Path, rows: str, message: str) -> None:
+    """Commit `rows` at the end of BETS.md on `main`, whatever is checked out."""
+    parent = git(repo, "rev-parse", "main")
+    blob = git(repo, "hash-object", "-w", "--stdin", stdin=read_main(repo) + rows)
+    with tempfile.TemporaryDirectory() as folder:
+        index = {"GIT_INDEX_FILE": str(Path(folder) / "index")}
+        git(repo, "read-tree", "main", env=index)
+        git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{BETS}", env=index)
+        tree = git(repo, "write-tree", env=index)
+    commit = git(repo, "commit-tree", tree, "-p", parent, "-m", message)
+    git(repo, "update-ref", "refs/heads/main", commit, parent)
+    if git(repo, "branch", "--show-current") == "main":
+        git(repo, "reset", "-q", "--", BETS)
+        git(repo, "checkout", "--", BETS)
+
+
+def push(repo: Path) -> None:
+    """Send `main` to GitHub if it is ahead. A failure waits for the next run,
+    and the late push time is what a reader then sees."""
+    if git(repo, "rev-list", "--count", "origin/main..main") == "0":
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    new = not path.exists()
-    with path.open("a", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        if new:
-            writer.writeheader()
-        writer.writerows(rows)
+    try:
+        git(repo, "push", "-q", "origin", "main")
+    except subprocess.CalledProcessError as exc:
+        print(f"  push failed, will retry: {exc.stderr}", file=sys.stderr)
 
 
-def recorded_bets(repo: Path) -> list[dict]:
-    return [row for path in sorted((repo / "bets").glob("*.csv")) for row in read_rows(path)]
+# ------------------------------------------------------------------ live bars
 
 
-def book_from_record(rows: list[dict], params: sim.Params) -> sim.Portfolio:
-    """The open book and the cash, from the recorded bets alone."""
-    portfolio = sim.Portfolio(params)
-    for row in rows:
-        outcome = sim.YES if row["side"] == "YES" else sim.NO
-        cost = float(row["cost_usd"])
-        portfolio.open[(row["market_id"], outcome)] = sim.Position(
-            market_id=row["market_id"], outcome_index=outcome, ticker=row["ticker"],
-            contract_type=row["kind"], barrier=float(row["barrier"]),
-            deadline=pd.Timestamp(row["deadline_utc"]), period=PERIOD,
-            entry_cycle_id=row["cycle_id"], entry_at=pd.Timestamp(row["book_seen_at_utc"]),
-            entry_fair=float("nan"), fair_source=row["fair_source"],
-            shares=float(row["shares"]), cost_usd=cost, fee_usd=float(row["fee_usd"]))
-        portfolio.cash -= cost
-    return portfolio
-
-
-# ---------------------------------------------------------------- live bars
-
-
-def fetch_todays_bars(symbols: list[str]) -> pd.DataFrame:
+def fetch_todays_bars(symbols: dict[str, str]) -> pd.DataFrame:
     """Today's 5-minute bars from the collector's source, in the store's shape."""
     import yfinance as yf
 
     frames = []
-    for symbol in symbols:
+    for symbol, yf_symbol in symbols.items():
         try:
-            bars = yf.Ticker(symbol).history(period="1d", interval="5m", auto_adjust=False)
+            bars = yf.Ticker(yf_symbol).history(period="1d", interval="5m", auto_adjust=False)
         except Exception as exc:     # one bad ticker must not lose the other bets
             print(f"  bars failed for {symbol}: {exc}", file=sys.stderr)
             continue
@@ -140,156 +146,85 @@ def bars_with_today(stored: pd.DataFrame, today: pd.DataFrame) -> pd.DataFrame:
                 .reset_index(drop=True))
 
 
-def tickers_covered(today: pd.DataFrame, symbols: list[str], stamp: pd.Timestamp) -> list[str]:
-    """The tickers whose bars have reached this cycle (`daily.bars_cover`, per ticker)."""
-    if today.empty:
-        return []
-    newest = today.groupby("symbol")["bar_time"].max()
-    return [s for s in symbols if s in newest.index and newest[s] >= stamp - BARS_LAG]
+def tickers_behind(today: pd.DataFrame, symbols: list[str], stamp: pd.Timestamp) -> list[str]:
+    """The tickers whose bars have not reached this cycle."""
+    newest = today.groupby("symbol")["bar_time"].max() if len(today) else pd.Series(dtype=object)
+    return [s for s in symbols if s not in newest.index or newest[s] < stamp - BARS_LAG]
 
 
-# ----------------------------------------------------------------- the model
+# ------------------------------------------------------------------ the model
 
 
-def decide(cycle_id: str, fair: pd.DataFrame, books: pd.DataFrame, tickers: list[str],
-           rows: list[dict]) -> dict:
-    """Run the model on one cycle, limited to this type's markets."""
-    fair = fair[(fair["period"] == PERIOD) & fair["ticker"].isin(tickers)]
-    books = books[(books["period"] == PERIOD) & books["ticker"].isin(tickers)]
-    model = EdgeTaker()
-    portfolio = book_from_record(rows, model.params)
-    now = sim._cycle_time(books, fair, cycle_id)
-    sim.settle(portfolio, data.resolutions_upto(now), now)
-    state = sim.CycleState(cycle_id=cycle_id, now=now, books=books, fair=fair,
-                           resolutions=None, portfolio=portfolio, betas={}, spy_intraday=0.0,
-                           params=model.params, loader=None)
-    orders = list(model.propose(state))
-    fills, _ = sim.execute(state, orders)
-    return {"now": now, "fair": fair, "taken": model.taken, "fills": fills,
-            "cash": portfolio.cash, "offers": len(orders)}
+def decide(cycle_id: str, config: dict, held: set[str]) -> tuple[list[replay.Position], pd.Timestamp]:
+    """One cycle through the replay's own steps: the new bets, and the cycle's clock."""
+    fee = replay._build("fee", config)
+    model = replay._build("sizing", config)
+    account = replay._build("account", config)
+    fills = dict(config["fills"])
+    types = markets_step.contract_types(config["markets"])
+    cycle = Cycle(cycle_id, types, replay._build("venue", config))
+    now = cycle.now
+    priced = price(cycle, config)
+    offers, behind = make_offers(priced, cycle.asks, fee, Bar(**config["bar"]), fills, held, now)
+    bought: dict = {}
+    held = set(held)
+    for order in model.decide(offers, Book(cash=account.cash())) or []:
+        replay._fill(order, behind, bought, held, account, fee, fills, cycle_id, now)
+    return list(bought.values()), now
 
 
-def bet_rows(result: dict, cycle_id: str, recorded_at: str, code: str,
-             questions: dict[str, str]) -> list[dict]:
-    """One row per bet, however many levels of the book it took."""
-    rows = []
-    for take in result["taken"]:
-        bet = take.bet
-        outcome = sim.YES if bet.side == "YES" else sim.NO
-        fills = [f for f in result["fills"]
-                 if f.market_id == bet.market_id and f.outcome_index == outcome]
-        if not fills:
-            continue
-        shares = sum(f.shares for f in fills)
-        cost = sum(f.cost_usd for f in fills)
-        row = sim._row_for(result["fair"], bet.market_id)
-        rows.append({
-            "recorded_at_utc": recorded_at, "cycle_id": cycle_id,
-            "book_seen_at_utc": pd.Timestamp(result["now"]).isoformat(),
-            "model": "edge_taker", "type": TYPE, "code": code,
-            "market_id": bet.market_id, "question": questions.get(bet.market_id, ""),
-            "ticker": bet.ticker, "kind": bet.kind, "barrier": float(row["barrier"]),
-            "deadline_utc": pd.Timestamp(row["deadline_utc"]).isoformat(), "side": bet.side,
-            "shares": round(shares, 6),
-            "avg_price": round(sum(f.price * f.shares for f in fills) / shares, 6),
-            "cost_usd": round(cost, 6), "fee_usd": round(sum(f.fee_usd for f in fills), 6),
-            "best_ask": bet.ask, "limit_cost": round(take.limit, 6),
-            "win_prob": round(bet.win_prob, 6), "value_per_share": round(bet.value, 6),
-            "ev_usd": round(bet.value * shares - cost, 6), "roi": round(bet.roi, 6),
-            "fair_source": bet.fair_source, "spot": float(row["spot"])})
-    return rows
-
-
-def questions_for(market_ids: list[str]) -> dict[str, str]:
+def questions_for(ids: list[str]) -> dict[str, str]:
     """Each market's own wording, so a reader can find it on Polymarket."""
-    if not market_ids:
-        return {}
-    ids = ", ".join(f"'{m}'" for m in market_ids)
-    frame = data._q(f"select distinct market_id, question from {data._src('poly_markets')} "
-                    f"where market_id in ({ids})")
-    return dict(zip(frame["market_id"], frame["question"]))
+    quoted = ", ".join(f"'{m}'" for m in ids)
+    frame = store._q(f"select distinct market_id, question from {store._src('poly_markets')} "
+                     f"where market_id in ({quoted})")
+    return dict(zip(frame["market_id"].astype(str), frame["question"]))
 
 
-# ----------------------------------------------------------------------- git
-
-
-def git(repo: Path, *args: str) -> str:
-    done = subprocess.run(["git", "-C", str(repo), *args], check=True,
-                          capture_output=True, text=True)
-    return done.stdout.strip()
-
-
-def code_version() -> str:
-    """The commit of the code that decided, `-dirty` if it had uncommitted edits."""
-    return git(HERE.parent, "describe", "--always", "--dirty")
-
-
-def publish(repo: Path, message: str | None) -> None:
-    """Commit what was added, if anything, and push whatever GitHub lacks.
-
-    A failed push is only logged: the commit waits for the next run, and the
-    late push time is what a reader then sees. With no remote yet, the commits
-    wait the same way.
-    """
-    if message:
-        git(repo, "add", "-A")
-        git(repo, "commit", "-m", message)
-    if git(repo, "remote") and git(repo, "rev-list", "--count", "@{u}..HEAD") != "0":
-        try:
-            git(repo, "push")
-        except subprocess.CalledProcessError as exc:
-            print(f"  push failed, will retry: {exc.stderr}", file=sys.stderr)
-
-
-# ---------------------------------------------------------------------- main
-
-
-def newest_new_cycle(repo: Path, now: pd.Timestamp) -> str | None:
-    """The newest finished session cycle, if it is fresh and not yet recorded."""
+def newest_new_cycle(now: pd.Timestamp) -> str | None:
+    """The newest finished session cycle, if it is fresh and not yet looked at."""
     date = now.strftime("%Y-%m-%d")
-    finished = set(data.runs(date, jobs=("snapshot",))["cycle_id"])
-    cycles = [c for c in data.session_cycles(date) if c in finished]
-    if not cycles:
+    finished = set(store.runs(date, jobs=("snapshot",))["cycle_id"])
+    cycles = [c for c in store.session_cycles(date) if c in finished]
+    if not cycles or pd.Timestamp(store.cycle_start(cycles[-1])) < now - MAX_BOOK_AGE:
         return None
-    latest = cycles[-1]
-    if pd.Timestamp(data.cycle_start(latest)) < now - MAX_BOOK_AGE:
-        return None
-    done = {row["cycle_id"] for row in read_rows(repo / "cycles.csv")}
-    return None if latest in done else latest
+    done = LAST_CYCLE.read_text().strip() if LAST_CYCLE.exists() else ""
+    return None if cycles[-1] == done else cycles[-1]
 
 
-def record(repo: Path = BETS_REPO) -> int:
-    started = pd.Timestamp.now(tz="UTC")
-    cycle_id = newest_new_cycle(repo, started)
+def record() -> int:
+    cycle_id = newest_new_cycle(pd.Timestamp.now(tz="UTC"))
     if cycle_id is None:
-        publish(repo, None)
+        push(REPO)
         return 0
 
-    symbols = stocks()
+    config = configs.load(CONFIG)
+    excluded = set(config["markets"].get("exclude_tickers") or [])
+    symbols = {u.symbol: u.yf_symbol for u in underlyings() if u.symbol not in excluded}
     today = fetch_todays_bars(symbols)
-    tickers = tickers_covered(today, symbols, pd.Timestamp(data.cycle_start(cycle_id)))
-    stored = data.bars_5m()
-    data.bars_5m = lambda: bars_with_today(stored, today)   # this process only
+    stale = tickers_behind(today, list(symbols), pd.Timestamp(store.cycle_start(cycle_id)))
+    config["markets"]["exclude_tickers"] = sorted(excluded | set(stale))
+    stored = store.bars_5m()
+    store.bars_5m = lambda: bars_with_today(stored, today)   # this process only
 
-    fair, _ = price_cycle(cycle_id)
-    result = decide(cycle_id, fair, data.books(cycle_id), tickers, recorded_bets(repo))
+    try:
+        bets, _ = decide(cycle_id, config, market_ids(read_main(REPO)))
+    except NotReady as exc:         # SPY's bars are behind: the next run tries again
+        print(f"  {exc}", file=sys.stderr)
+        return 0
 
-    recorded_at = pd.Timestamp.now(tz="UTC").isoformat()
-    code = code_version()
-    bought = sorted({f.market_id for f in result["fills"]})
-    bets = bet_rows(result, cycle_id, recorded_at, code, questions_for(bought))
-    date = data.cycle_date(cycle_id)
-    append_rows(repo / "bets" / f"{date}.csv", BET_COLUMNS, bets)
-    append_rows(repo / "cycles.csv", CYCLE_COLUMNS, [{
-        "recorded_at_utc": recorded_at, "cycle_id": cycle_id,
-        "book_seen_at_utc": pd.Timestamp(result["now"]).isoformat(),
-        "model": "edge_taker", "type": TYPE, "code": code,
-        "markets_priced": len(result["fair"]),
-        "tickers_left_out": " ".join(sorted(set(symbols) - set(tickers))),
-        "offers_clearing_bar": result["offers"], "bets": len(bets),
-        "cash_usd": round(result["cash"], 2)}])
-    publish(repo, f"{cycle_id}: {len(bets)} bet(s)")
-    print(f"{cycle_id}: {len(bets)} bet(s), {dt.datetime.now(dt.timezone.utc).isoformat()}")
+    if bets:
+        written_at = pd.Timestamp.now(tz="UTC")
+        code = git(REPO, "describe", "--always", "--dirty")
+        questions = questions_for([p.market_id for p in bets])
+        rows = "".join(table_row(p, written_at, code, questions.get(p.market_id, ""))
+                       for p in bets)
+        append_to_main(REPO, rows, f"{len(bets)} bet(s) from cycle {cycle_id}")
+    push(REPO)
+    LAST_CYCLE.parent.mkdir(parents=True, exist_ok=True)
+    LAST_CYCLE.write_text(cycle_id)
+    left_out = f", left out {' '.join(stale)}" if stale else ""
+    print(f"{cycle_id}: {len(bets)} bet(s){left_out}")
     return 0
 
 
