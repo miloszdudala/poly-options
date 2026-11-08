@@ -419,19 +419,26 @@ def touched_between(symbol: str, barrier: float, is_up: bool, start, end) -> boo
     venue's rules say the market was already a YES. This is the path check.
 
     Only bars whose five minutes are up by `end` count, so the bar still
-    forming cannot leak its high or low. Returns None when there is no bar to
+    forming cannot leak its high or low. A 5-minute bar that straddles `start`
+    counts too: its print may fall after a mid-week market's creation, and a
+    market that may already be decided is not traded (COIN `hit_down 132.50`,
+    relisted 2026-11-06 17:38:14Z; the 17:38 minute's low 132.32 cannot be
+    placed either side of it, and the engine bought the NO at 1c at 17:45). The
+    hourly and daily bars still need to start at `start`: a straddling one
+    holds up to a day of earlier prices. Returns None when there is no bar to
     look at, which the caller must treat as "no evidence", not "no touch":
     the store's 5-minute bars begin 2026-06-22.
     """
     start = pd.Timestamp(start)
     end = pd.Timestamp(end)
     pieces = []
-    for bars, length in ((session_bars_5m(symbol), pd.Timedelta(minutes=5)),
-                         (session_bars_1h(symbol), pd.Timedelta(hours=1))):
+    five = pd.Timedelta(minutes=5)
+    for bars, length, reach in ((session_bars_5m(symbol), five, five),
+                                (session_bars_1h(symbol), pd.Timedelta(hours=1), pd.Timedelta(0))):
         if bars.empty:
             continue
         finished = bars["bar_time"] + length <= end
-        pieces.append(bars[(bars["bar_time"] >= start) & finished][["high", "low"]])
+        pieces.append(bars[(bars["bar_time"] + reach > start) & finished][["high", "low"]])
     daily = daily_bars_asof(symbol, end)
     if not daily.empty:
         pieces.append(daily[daily["bar_time"] >= start][["high", "low"]])

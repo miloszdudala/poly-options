@@ -146,6 +146,21 @@ def test_the_touch_check_ignores_the_bar_still_forming(monkeypatch):
                                 "2026-09-16T19:40:00Z") is True
 
 
+def test_a_print_in_the_bar_holding_the_creation_counts_as_a_touch(monkeypatch):
+    """COIN hit_down 132.50, relisted 17:38:14Z: the 17:35 bar's low may be
+    after the creation, so the market may already be decided."""
+    bars = five_minute("X", ["2026-11-06T17:30:00Z", "2026-11-06T17:35:00Z",
+                             "2026-11-06T17:40:00Z"],
+                       opens=[134.0, 133.9, 133.0], highs=[134.6, 134.0, 133.2],
+                       lows=[130.0, 132.3, 132.6], closes=[134.0, 132.8, 132.8])
+    monkeypatch.setattr(store, "bars_5m", lambda: bars)
+    store.session_bars_5m.cache_clear()
+    created = "2026-11-06T17:38:14Z"
+    assert store.touched_between("X", 132.5, False, created, "2026-11-06T17:45:26Z") is True
+    # The 17:30 bar ended before the creation: its 130.00 does not count.
+    assert store.touched_between("X", 132.0, False, created, "2026-11-06T17:45:26Z") is False
+
+
 def test_the_touch_check_ignores_extended_hours_and_the_time_before_the_period(monkeypatch):
     """The rules text: regular hours only, from the start of the period."""
     bars = five_minute("X", ["2026-09-15T19:55:00Z",   # Tuesday, before the window

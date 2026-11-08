@@ -97,8 +97,9 @@ def watch_start(deadline, period: str, created_at=None, from_creation: bool = Fa
     barrier crossed only before its own creation.
 
     Only 1-minute candles after creation count; a bar that straddles the
-    creation instant cannot say which side of it its high or low fell, so
-    callers compare bar *starts* against this, which drops that bar.
+    creation instant cannot say which side of it its high or low fell.
+    `store.touched_between` counts a straddling 5-minute bar as a touch, so
+    such a market is not traded, and drops straddling hourly and daily bars.
     """
     start = period_start(deadline, period)
     if pd.isna(start) or not from_creation or created_at is None or pd.isna(created_at):
