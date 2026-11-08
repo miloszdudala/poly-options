@@ -1,14 +1,19 @@
-"""Add the `mvp` config's bets to BETS.md at the moment they are decided.
+"""Add the `mvp` config's bets to proof/BETS.md at the moment they are decided,
+and their results to proof/SETTLEMENTS.md once Polymarket has resolved them.
 
     .venv/bin/python model/record_bets.py
 
-Run by launchd every five minutes. It does nothing unless the collector has
-finished a new session cycle. A cycle with bets adds rows to the end of
-`BETS.md` on `main`, commits and pushes; a cycle without bets commits nothing.
+Run by launchd every five minutes. Bets: nothing happens unless the collector
+has finished a new session cycle. A cycle with bets adds rows to the end of
+the file on `main`, commits and pushes; a cycle without bets commits nothing.
 
-BETS.md outlives everything else in this repo. It depends on no other file, and
-only its market IDs are read back, so a market is not bet on twice. Replace this
-script freely when the code is rebuilt, as long as rows are only ever added.
+Settlements: every bet in BETS.md without a settlement is looked up on
+Polymarket's public API, and its resolution, not our own reading of the stock's
+price, is what gets written. This needs nothing but the two files and the API.
+
+proof/ outlives everything else in this repo. Its files depend on nothing else.
+Replace this script freely when the code is rebuilt, as long as rows are only
+ever added to them.
 
 The commit goes straight onto `main` without touching the checkout, so the
 record keeps going whatever branch is checked out.
@@ -21,6 +26,7 @@ stores, so simulation results cannot move.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -28,6 +34,7 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
+import requests
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -37,7 +44,7 @@ sys.path.append(str(REPO / "data" / "src"))   # see store.py
 import store  # noqa: E402
 import pipeline  # noqa: E402,F401  (registers the step variants)
 import replay  # noqa: E402
-from config import underlyings  # noqa: E402
+from config import markets_cfg, underlyings  # noqa: E402
 from pipeline import config as configs, markets as markets_step  # noqa: E402
 from pipeline.core import Cycle, NotReady, price  # noqa: E402
 from pipeline.inputs import BARS_LAG  # noqa: E402
@@ -45,10 +52,13 @@ from pipeline.offers import Bar, make_offers  # noqa: E402
 from pipeline.sizing import Book  # noqa: E402
 
 CONFIG = "mvp"
-BETS = "BETS.md"
+BETS = "proof/BETS.md"
+SETTLEMENTS = "proof/SETTLEMENTS.md"
 LAST_CYCLE = HERE / "store" / "record_last_cycle"      # not in git
 MAX_BOOK_AGE = pd.Timedelta(minutes=15)                # by then the next cycle has begun
 MARKET_ID_COLUMN = 3
+SETTLED_ID_COLUMN = 2
+GAMMA_BATCH = 100
 
 
 # ------------------------------------------------------------------ the table
@@ -66,10 +76,15 @@ def _stamp(when) -> str:
     return pd.Timestamp(when).tz_convert("UTC").strftime("%Y-%m-%d %H:%M:%S")
 
 
-def market_ids(text: str) -> set[str]:
-    """The markets already bet on, read from the table's rows."""
-    rows = [line.split("|")[1:-1] for line in text.splitlines() if line.startswith("| 20")]
-    return {row[MARKET_ID_COLUMN].strip() for row in rows}
+def table_rows(text: str) -> list[list[str]]:
+    """The cells of a table's rows; every row starts with its 20xx write time."""
+    return [[cell.strip() for cell in line.split("|")[1:-1]]
+            for line in text.splitlines() if line.startswith("| 20")]
+
+
+def market_ids(text: str, column: int = MARKET_ID_COLUMN) -> set[str]:
+    """The markets a table already has a row for."""
+    return {row[column] for row in table_rows(text)}
 
 
 # ------------------------------------------------------------------------ git
@@ -81,25 +96,25 @@ def git(repo: Path, *args: str, stdin: str | None = None, env: dict | None = Non
     return done.stdout.strip()
 
 
-def read_main(repo: Path) -> str:
-    return subprocess.run(["git", "-C", str(repo), "show", f"main:{BETS}"], check=True,
+def read_main(repo: Path, path: str = BETS) -> str:
+    return subprocess.run(["git", "-C", str(repo), "show", f"main:{path}"], check=True,
                           capture_output=True, text=True).stdout
 
 
-def append_to_main(repo: Path, rows: str, message: str) -> None:
-    """Commit `rows` at the end of BETS.md on `main`, whatever is checked out."""
+def append_to_main(repo: Path, rows: str, message: str, path: str = BETS) -> None:
+    """Commit `rows` at the end of a table on `main`, whatever is checked out."""
     parent = git(repo, "rev-parse", "main")
-    blob = git(repo, "hash-object", "-w", "--stdin", stdin=read_main(repo) + rows)
+    blob = git(repo, "hash-object", "-w", "--stdin", stdin=read_main(repo, path) + rows)
     with tempfile.TemporaryDirectory() as folder:
         index = {"GIT_INDEX_FILE": str(Path(folder) / "index")}
         git(repo, "read-tree", "main", env=index)
-        git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{BETS}", env=index)
+        git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=index)
         tree = git(repo, "write-tree", env=index)
     commit = git(repo, "commit-tree", tree, "-p", parent, "-m", message)
     git(repo, "update-ref", "refs/heads/main", commit, parent)
     if git(repo, "branch", "--show-current") == "main":
-        git(repo, "reset", "-q", "--", BETS)
-        git(repo, "checkout", "--", BETS)
+        git(repo, "reset", "-q", "--", path)
+        git(repo, "checkout", "--", path)
 
 
 def push(repo: Path) -> None:
@@ -228,5 +243,67 @@ def record() -> int:
     return 0
 
 
+# ---------------------------------------------------------------- settlements
+
+
+def unsettled(bets: str, settlements: str) -> list[list[str]]:
+    """The rows of BETS.md with no row yet in SETTLEMENTS.md."""
+    done = market_ids(settlements, SETTLED_ID_COLUMN)
+    return [row for row in table_rows(bets) if row[MARKET_ID_COLUMN] not in done]
+
+
+def closed_markets(ids: list[str]) -> dict[str, dict]:
+    """Polymarket's public record of those markets that have closed."""
+    url = markets_cfg()["polymarket"]["gamma_base"] + "/markets"
+    found = {}
+    for start in range(0, len(ids), GAMMA_BATCH):
+        batch = ids[start:start + GAMMA_BATCH]
+        answer = requests.get(url, params={"id": batch, "closed": "true", "limit": GAMMA_BATCH},
+                              timeout=30)
+        answer.raise_for_status()
+        found.update({str(m["id"]): m for m in answer.json()})
+    return found
+
+
+def settlement_row(bet: list[str], market: dict, written_at) -> str | None:
+    """A row for a resolved market; None while it is unresolved or in dispute.
+    Only what BETS.md does not already say, joined on the market ID. Outcome 0
+    is what a YES buys and outcome 1 what a NO buys."""
+    if (market.get("umaResolutionStatus") or "").lower() != "resolved":
+        return None
+    prices = [float(x) for x in json.loads(market["outcomePrices"])]
+    if sorted(prices) not in ([0.0, 1.0], [0.5, 0.5]):
+        return None
+    outcomes = json.loads(market["outcomes"])
+    won = outcomes[prices.index(1.0)] if 1.0 in prices else "50-50"
+    side, shares, cost = bet[5], float(bet[6]), float(bet[8])
+    payout = prices[0 if side == "YES" else 1] * shares
+    cells = [_stamp(written_at), _stamp(market["closedTime"]), bet[MARKET_ID_COLUMN], won,
+             f"{payout:.2f}", f"{payout - cost:.2f}"]
+    return "| " + " | ".join(cells) + " |\n"
+
+
+def record_settlements() -> int:
+    waiting = unsettled(read_main(REPO), read_main(REPO, SETTLEMENTS))
+    if waiting:
+        closed = closed_markets([row[MARKET_ID_COLUMN] for row in waiting])
+        written_at = pd.Timestamp.now(tz="UTC")
+        rows = [settlement_row(row, closed[row[MARKET_ID_COLUMN]], written_at)
+                for row in waiting if row[MARKET_ID_COLUMN] in closed]
+        rows = [row for row in rows if row]
+        if rows:
+            append_to_main(REPO, "".join(rows), f"{len(rows)} settlement(s)", SETTLEMENTS)
+            print(f"{len(rows)} settlement(s)")
+    push(REPO)
+    return 0
+
+
+def main() -> int:
+    try:
+        return record()
+    finally:                 # a failed bet cycle must not hold up the results
+        record_settlements()
+
+
 if __name__ == "__main__":
-    raise SystemExit(record())
+    raise SystemExit(main())

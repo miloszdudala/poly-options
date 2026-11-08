@@ -106,9 +106,11 @@ every choice and whether it is decided, open or a guess.
 
 - `data/` - collector. `data/src/jobs.py discover | snapshot | daily`. Writes
   `data/store/` (Parquet, ~2 GB, **not in git**).
-- `BETS.md` - bets recorded before they resolve, the proof the idea works. It
-  must survive any rebuild of the code. Only ever add rows; never edit, move or
-  rewrite it or its history. `model/record_bets.py` writes it.
+- `proof/` - the record that the idea works. It must survive any rebuild of the
+  code. Only ever add rows; never edit or rewrite these files or their history.
+  `model/record_bets.py` writes them.
+  - `BETS.md` - bets, recorded before they resolve.
+  - `SETTLEMENTS.md` - how those bets resolved, on Polymarket's own word.
 - `model/` - `store.py` (the one door to the Parquet store, or to a sample of
   it), `pipeline/` (the decision steps), `configs/`, `replay.py` (runs a
   config over dates), `lab.py` (score or sweep one step on a sample),

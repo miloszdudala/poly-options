@@ -5,9 +5,10 @@
     <key>Label</key>
     <string>com.polyoptions.recordbets</string>
 
-    <!-- Adds bets to BETS.md on main and pushes. Every five minutes because a
-         snapshot takes two to seven minutes and a bet should be pushed as soon
-         as it finishes; with no new cycle the job exits at once. -->
+    <!-- Adds bets and their results to proof/ on main and pushes.
+         Every five minutes because a snapshot takes two to seven minutes and a
+         bet should be pushed as soon as it finishes; with no new cycle it only
+         looks up the open bets' results. -->
     <key>ProgramArguments</key>
     <array>
         <string>__REPO__/.venv/bin/python</string>

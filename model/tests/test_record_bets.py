@@ -1,4 +1,4 @@
-"""BETS.md: rows are only added, on main, whatever is checked out."""
+"""proof/: rows are only added, on main, whatever is checked out."""
 from __future__ import annotations
 
 import subprocess
@@ -44,6 +44,7 @@ def repo(tmp_path):
     run("init", "-q", "-b", "main")
     run("config", "user.email", "t@example.com")
     run("config", "user.name", "t")
+    (tmp_path / "proof").mkdir()
     (tmp_path / rb.BETS).write_text(HEADER)
     run("add", rb.BETS)
     run("commit", "-q", "-m", "start")
@@ -81,3 +82,73 @@ def test_todays_bars_win_an_overlap_with_the_store():
     stored = pd.DataFrame({"symbol": ["META"], "bar_time": [when], "open": [1.0]})
     today = pd.DataFrame({"symbol": ["META"], "bar_time": [when], "open": [2.0]})
     assert rb.bars_with_today(stored, today)["open"].tolist() == [2.0]
+
+
+BET = ["2026-11-06 15:53:55", "2026-11-06 15:45:20", "2026-11-06 21:00:00", "m1", "Hit $640?",
+       "NO", "37.50", "0.740", "28.14", "89.4%", "5.39", "abc"]
+
+
+def _resolved(prices, status="resolved"):
+    return {"umaResolutionStatus": status, "outcomes": '["Yes", "No"]', "outcomePrices": prices,
+            "closedTime": "2026-11-06 21:04:06.36125+00"}
+
+
+WRITTEN = pd.Timestamp("2026-11-06T22:00:00Z")
+
+
+def _cells(row):
+    return rb.table_rows(row)[0]
+
+
+def test_a_no_that_won_is_paid_a_dollar_a_share():
+    cells = _cells(rb.settlement_row(BET, _resolved('["0", "1"]'), WRITTEN))
+    assert cells == ["2026-11-06 22:00:00", "2026-11-06 21:04:06", "m1", "No", "37.50", "9.36"]
+
+
+def test_a_no_that_lost_loses_its_cost():
+    assert _cells(rb.settlement_row(BET, _resolved('["1", "0"]'), WRITTEN))[-3:] == ["Yes", "0.00", "-28.14"]
+
+
+def test_a_yes_is_paid_by_the_first_outcome():
+    yes = BET[:5] + ["YES"] + BET[6:]
+    assert _cells(rb.settlement_row(yes, _resolved('["1", "0"]'), WRITTEN))[-3:] == ["Yes", "37.50", "9.36"]
+
+
+def test_a_fifty_fifty_pays_half():
+    assert _cells(rb.settlement_row(BET, _resolved('["0.5", "0.5"]'), WRITTEN))[-3:] == ["50-50", "18.75", "-9.39"]
+
+
+@pytest.mark.parametrize("market", [_resolved('["0.6", "0.4"]'), _resolved('["1", "0"]', status="disputed"),
+                                    _resolved('["1", "0"]', status=None)])
+def test_an_unresolved_or_disputed_market_gets_no_row(market):
+    assert rb.settlement_row(BET, market, WRITTEN) is None
+
+
+def test_a_bet_stays_unsettled_only_until_its_row_exists():
+    bets = HEADER + "| " + " | ".join(BET) + " |\n"
+    assert rb.unsettled(bets, HEADER) == [BET]
+    assert rb.unsettled(bets, HEADER + rb.settlement_row(BET, _resolved('["0", "1"]'), WRITTEN)) == []
+
+
+def test_settlements_append_to_their_own_file(repo):
+    (repo / rb.SETTLEMENTS).write_text("settlements\n")
+    rb.git(repo, "add", rb.SETTLEMENTS)
+    rb.git(repo, "commit", "-q", "-m", "more")
+    rb.append_to_main(repo, "| 2026 | row |\n", "one", rb.SETTLEMENTS)
+    assert (repo / rb.SETTLEMENTS).read_text() == "settlements\n| 2026 | row |\n"
+    assert rb.read_main(repo) == HEADER
+    assert rb.git(repo, "status", "--porcelain") == ""
+
+
+def test_the_review_sets_settled_pnl_against_promised_ev(tmp_path):
+    import review_proof
+    row = "| " + " | ".join(BET) + " |\n"
+    other = row.replace("| m1 |", "| m2 |")
+    (tmp_path / "BETS.md").write_text(HEADER + row + other)
+    (tmp_path / "SETTLEMENTS.md").write_text(
+        HEADER + rb.settlement_row(BET, _resolved('["0", "1"]'), WRITTEN)
+        + "| 2026-11-06 22:00:00 | 2026-11-06 21:00:00 | m9 | No | 1.00 | 0.50 |\n")
+    text = review_proof.review(tmp_path)
+    assert "2026-11-06     1     1      28.14        5.39       9.36          1.74" in text
+    assert "1 bet(s) open: $28.14 in, $5.39 promised" in text
+    assert "settlements with no bet: m9" in text
