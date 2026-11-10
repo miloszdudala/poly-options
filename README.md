@@ -1,7 +1,7 @@
 I have initially realised Polymarket bets carry some resemblance to options in January and made short script which took copy-pasted by hand table from nasdaq website and Polymarket. It identified some mispricings but small since it relied on one time copy-paste. 
 In September, using Claude Code, I took a more structured approach, scraping both platforms every 15 minutes during open sessions to collect a large amount of data and find mispricings. 
 
-The essence of this project is that some Polymarket bets carry a resemblance to options traded on US stock exchanges. I’ve learnt from a YouTube video that the Black-Scholes model is a standard way to price options nowadays, and that a little bit of math allows us to derive a probability that a stock touches or closes above a given price before a given date from publicly available options data.
+The essence of this project is that some Polymarket bets carry a resemblance to options traded on US stock exchanges. I’ve learnt from a YouTube video that the Black-Scholes model is a standard way to price options nowadays, and that a little bit of math allows us to derive a probability that a stock touches or closes above a given price before a given date from publicly available options data, which is exactly what bets are on.
 
 This model assumes that if we had a perfect 1-to-1 comparison of a Polymarket bet to a Nasdaq/NYSE option, the latter we expect to be much closer to the truth, since the volume is significantly higher and mainly dictated by professionals in the industry, whereas for Polymarket, I suppose, it is mostly internet gamblers. 
 
