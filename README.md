@@ -16,7 +16,7 @@ Look at bets and options, use the engine to calculate mispricings (that include 
 We have to wait until the bet resolves since these markets are small and the spread between the buy and sell price virtually erases all the profit. The spread, however, doesn’t apply if we don’t sell the bet but rather wait till it is settled. 
 
 Since most stocks are largely correlated, there is a risk that despite positive expected value, all bets will lose. 
-I have an idea for a model that hedges this risk by balancing the type of bets it takes (basically balancing the amount of bets that predict the stock will go down and up). Another good idea would be to construct a few models, perhaps with different methods from what we have, to approximate and take the bet only if all or the majority of models agree it pays off.
+I have an idea for a model that hedges this risk by balancing the type of bets it takes (basically balancing the amount of bets that predict the stock will go down and up). Another good idea would be to construct a few models, perhaps with different methods for what we have to approximate and take the bet only if all or the majority of models agree it pays off.
 
 All of the code was written by AI (Claude Code). My part was the ideas and the decisions - which markets to target, how to price them, which models to test, and how to evaluate them. Along the way, I revised many of my initial assumptions, for example, moving from “close above” to “hit” markets once their volume collapsed, and holding every bet to resolution once the spread turned out to erase the profit of selling early. I paid much less attention to code structure, which led to a repository that is difficult to scale and contains hidden approximations that are likely imperfect in places.
 
