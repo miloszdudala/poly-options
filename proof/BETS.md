@@ -114,3 +114,4 @@
 | 2026-11-11 15:50:45 | 2026-11-11 15:45:21 | 2026-11-13 21:00:00 | 6941584 | Will Rocket Lab USA, Inc. (RKLB) hit (LOW) $58 Week of November 9 2026? | NO | 20.00 | 0.930 | 18.65 | 95.2% | 0.38 | fc3703b-dirty |
 | 2026-11-11 16:06:55 | 2026-11-11 16:00:22 | 2026-11-13 21:00:00 | 6764365 | Will Robinhood Markets, Inc. (HOOD) hit (LOW) $75 Week of November 9 2026? | NO | 90.00 | 0.950 | 85.67 | 97.1% | 1.72 | da147c7-dirty |
 | 2026-11-11 16:49:47 | 2026-11-11 16:45:19 | 2026-11-13 21:00:00 | 6764228 | Will Palantir Technologies Inc. (PLTR) hit (LOW) $159 Week of November 9 2026? | NO | 668.50 | 0.940 | 629.90 | 96.2% | 12.88 | 3834c8d-dirty |
+| 2026-11-11 17:21:54 | 2026-11-11 17:15:29 | 2026-11-13 21:00:00 | 6941553 | Will Microsoft Corporation (MSFT) hit (HIGH) $547.50 Week of November 9 2026? | NO | 15.00 | 0.930 | 13.99 | 95.3% | 0.30 | 0d478ba-dirty |
