@@ -115,3 +115,5 @@
 | 2026-11-11 16:06:55 | 2026-11-11 16:00:22 | 2026-11-13 21:00:00 | 6764365 | Will Robinhood Markets, Inc. (HOOD) hit (LOW) $75 Week of November 9 2026? | NO | 90.00 | 0.950 | 85.67 | 97.1% | 1.72 | da147c7-dirty |
 | 2026-11-11 16:49:47 | 2026-11-11 16:45:19 | 2026-11-13 21:00:00 | 6764228 | Will Palantir Technologies Inc. (PLTR) hit (LOW) $159 Week of November 9 2026? | NO | 668.50 | 0.940 | 629.90 | 96.2% | 12.88 | 3834c8d-dirty |
 | 2026-11-11 17:21:54 | 2026-11-11 17:15:29 | 2026-11-13 21:00:00 | 6941553 | Will Microsoft Corporation (MSFT) hit (HIGH) $547.50 Week of November 9 2026? | NO | 15.00 | 0.930 | 13.99 | 95.3% | 0.30 | 0d478ba-dirty |
+| 2026-11-11 17:37:56 | 2026-11-11 17:30:26 | 2026-11-13 21:00:00 | 6764353 | Will Coinbase Global, Inc. (COIN) hit (LOW) $122.50 Week of November 9 2026? | NO | 25.00 | 0.930 | 23.32 | 95.9% | 0.66 | 38dc613-dirty |
+| 2026-11-11 17:37:56 | 2026-11-11 17:30:26 | 2026-11-13 21:00:00 | 6764037 | Will Alphabet Inc. (GOOGL) hit (LOW) $280 Week of November 9 2026? | NO | 600.00 | 0.910 | 547.97 | 93.3% | 11.77 | 38dc613-dirty |
