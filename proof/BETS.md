@@ -103,3 +103,7 @@
 | 2026-11-11 15:08:06 | 2026-11-11 15:00:25 | 2026-11-13 21:00:00 | 6764231 | Will Palantir Technologies Inc. (PLTR) hit (LOW) $156 Week of November 9 2026? | NO | 2.50 | 0.940 | 2.36 | 96.6% | 0.06 | 9e75e84-dirty |
 | 2026-11-11 15:08:06 | 2026-11-11 15:00:25 | 2026-11-13 21:00:00 | 6764190 | Will Netflix, Inc. (NFLX) hit (LOW) $60 Week of November 9 2026? | NO | 10.60 | 0.920 | 9.78 | 94.5% | 0.24 | 9e75e84-dirty |
 | 2026-11-11 15:08:06 | 2026-11-11 15:00:25 | 2026-11-13 21:00:00 | 6910459 | Will Tesla, Inc. (TSLA) hit (HIGH) $420 Week of November 9 2026? | NO | 2.50 | 0.930 | 2.33 | 95.2% | 0.05 | 9e75e84-dirty |
+| 2026-11-11 15:18:54 | 2026-11-11 15:15:24 | 2026-11-13 21:00:00 | 6764373 | Will Micron Technology, Inc. (MU) hit (HIGH) $810 Week of November 9 2026? | NO | 10.00 | 0.270 | 2.78 | 31.3% | 0.35 | 318db20-dirty |
+| 2026-11-11 15:18:54 | 2026-11-11 15:15:24 | 2026-11-13 21:00:00 | 6764070 | Will Meta Platforms, Inc. (META) hit (HIGH) $650 Week of November 9 2026? | NO | 50.75 | 0.420 | 21.81 | 46.7% | 1.90 | 318db20-dirty |
+| 2026-11-11 15:18:54 | 2026-11-11 15:15:24 | 2026-11-13 21:00:00 | 6763968 | Will Amazon.com, Inc. (AMZN) hit (HIGH) $284 Week of November 9 2026? | NO | 2.50 | 0.940 | 2.36 | 96.4% | 0.05 | 318db20-dirty |
+| 2026-11-11 15:18:54 | 2026-11-11 15:15:24 | 2026-11-13 21:00:00 | 6764354 | Will Coinbase Global, Inc. (COIN) hit (LOW) $120 Week of November 9 2026? | NO | 10.05 | 0.910 | 9.18 | 93.2% | 0.19 | 318db20-dirty |
