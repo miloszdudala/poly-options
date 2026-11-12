@@ -111,6 +111,8 @@ every choice and whether it is decided, open or a guess.
   `model/record_bets.py` writes them.
   - `BETS.md` - bets, recorded before they resolve.
   - `SETTLEMENTS.md` - how those bets resolved, on Polymarket's own word.
+  - `PERFORMANCE.md` - one row per fully resolved week, rebuilt by
+    `performance.py` from the two files above and nothing else; it only grows.
 - `model/` - `store.py` (the one door to the Parquet store, or to a sample of
   it), `pipeline/` (the decision steps), `configs/`, `replay.py` (runs a
   config over dates), `lab.py` (score or sweep one step on a sample),

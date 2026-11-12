@@ -51,9 +51,16 @@ from pipeline.inputs import BARS_LAG  # noqa: E402
 from pipeline.offers import Bar, make_offers  # noqa: E402
 from pipeline.sizing import Book  # noqa: E402
 
+sys.dont_write_bytecode, _bytecode = True, sys.dont_write_bytecode   # keep proof/ to its files
+sys.path.insert(0, str(REPO / "proof"))
+import performance  # noqa: E402
+sys.path.pop(0)
+sys.dont_write_bytecode = _bytecode
+
 CONFIG = "mvp"
 BETS = "proof/BETS.md"
 SETTLEMENTS = "proof/SETTLEMENTS.md"
+PERFORMANCE = "proof/PERFORMANCE.md"
 LAST_CYCLE = HERE / "store" / "record_last_cycle"      # not in git
 MAX_BOOK_AGE = pd.Timedelta(minutes=15)                # by then the next cycle has begun
 MARKET_ID_COLUMN = 3
@@ -101,10 +108,17 @@ def read_main(repo: Path, path: str = BETS) -> str:
                           capture_output=True, text=True).stdout
 
 
+def on_main(repo: Path, path: str) -> bool:
+    return subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"main:{path}"],
+                          capture_output=True).returncode == 0
+
+
 def append_to_main(repo: Path, rows: str, message: str, path: str = BETS) -> None:
-    """Commit `rows` at the end of a table on `main`, whatever is checked out."""
+    """Commit `rows` at the end of a table on `main`, whatever is checked out;
+    a file `main` does not have yet starts with them."""
     parent = git(repo, "rev-parse", "main")
-    blob = git(repo, "hash-object", "-w", "--stdin", stdin=read_main(repo, path) + rows)
+    old = read_main(repo, path) if on_main(repo, path) else ""
+    blob = git(repo, "hash-object", "-w", "--stdin", stdin=old + rows)
     with tempfile.TemporaryDirectory() as folder:
         index = {"GIT_INDEX_FILE": str(Path(folder) / "index")}
         git(repo, "read-tree", "main", env=index)
@@ -294,8 +308,26 @@ def record_settlements() -> int:
         if rows:
             append_to_main(REPO, "".join(rows), f"{len(rows)} settlement(s)", SETTLEMENTS)
             print(f"{len(rows)} settlement(s)")
+    record_performance()
     push(REPO)
     return 0
+
+
+def record_performance() -> None:
+    """Bring PERFORMANCE.md on `main` up to date with BETS.md and SETTLEMENTS.md.
+    The table only ever grows; one that would change an existing row is not
+    written."""
+    new = performance.table(read_main(REPO), read_main(REPO, SETTLEMENTS),
+                            pd.Timestamp.now(tz="UTC").to_pydatetime())
+    old = read_main(REPO, PERFORMANCE) if on_main(REPO, PERFORMANCE) else ""
+    if new == old:
+        return
+    if not new.startswith(old):
+        print("  PERFORMANCE.md would change an existing row; left alone", file=sys.stderr)
+        return
+    weeks = len(performance.rows(new)) - len(performance.rows(old))
+    append_to_main(REPO, new[len(old):], f"{weeks} week(s) of performance", PERFORMANCE)
+    print(f"{weeks} week(s) of performance")
 
 
 def main() -> int:

@@ -152,3 +152,51 @@ def test_the_review_sets_settled_pnl_against_promised_ev(tmp_path):
     assert "2026-11-06     1     1      28.14        5.39       9.36          1.74" in text
     assert "1 bet(s) open: $28.14 in, $5.39 promised" in text
     assert "settlements with no bet: m9" in text
+
+
+
+def _week():
+    bet = list(BET)
+    bet[4] = "META hit $640 Week of November 2 2026?"
+    first = "| " + " | ".join(bet) + " |\n"
+    settled = HEADER + rb.settlement_row(bet, _resolved('["0", "1"]'), WRITTEN)
+    both = settled + settled.splitlines(keepends=True)[-1].replace("| m1 |", "| m2 |")
+    return HEADER + first + first.replace("| m1 |", "| m2 |"), settled, both
+
+
+AFTER = WRITTEN.to_pydatetime()
+
+
+def test_a_week_waits_for_its_last_settlement():
+    bets, settled, both = _week()
+    assert rb.performance.table(bets, settled, AFTER) == rb.performance.HEADER
+    row = rb.performance.table(bets, both, AFTER)
+    assert ("| 2026-11-06 22:00:00 | 2026-11-06 21:00:00 | 2 | 2 | 0 | 1.8 | 56.28 | 10.78 "
+            "| 18.72 | 1.74 | 33.3% |") in row
+
+
+def test_a_week_waits_for_its_deadline():
+    bets, _, both = _week()
+    before = WRITTEN.replace(hour=20).to_pydatetime()
+    assert rb.performance.table(bets, both, before) == rb.performance.HEADER
+
+
+def test_only_weekly_markets_make_a_week():
+    bets, _, both = _week()
+    monthly = bets.replace("Week of November 2 2026", "in November")
+    assert rb.performance.table(monthly, both, AFTER) == rb.performance.HEADER
+
+
+def test_performance_md_starts_on_main_and_only_grows(repo, monkeypatch):
+    bets, _, both = _week()
+    (repo / rb.SETTLEMENTS).write_text(both)
+    (repo / rb.BETS).write_text(bets)
+    rb.git(repo, "add", rb.BETS, rb.SETTLEMENTS)
+    rb.git(repo, "commit", "-q", "-m", "bets")
+    monkeypatch.setattr(rb, "REPO", repo)
+    rb.record_performance()
+    rb.record_performance()
+    text = (repo / rb.PERFORMANCE).read_text()
+    assert text.startswith(rb.performance.HEADER) and text.count("| 2026-11-06 21:00:00 |") == 1
+    assert rb.git(repo, "status", "--porcelain") == ""
+    assert rb.git(repo, "log", "--format=%s", "-1") == "1 week(s) of performance"
