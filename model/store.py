@@ -197,6 +197,8 @@ def market_book_times(cycle_id: str) -> pd.DataFrame:
 
 # ---------------------------------------------------------- option chain
 
+EXTRA_ROOTS = {"SPX": "SPXW", "NDX": "NDXP"}     # standard weeklies with their own root
+
 
 def option_chain(cycle_id: str, symbols: tuple[str, ...] | None = None) -> pd.DataFrame:
     """Cboe rows for one cycle, filtered to contracts worth believing.
@@ -209,18 +211,28 @@ def option_chain(cycle_id: str, symbols: tuple[str, ...] | None = None) -> pd.Da
     yfinance rows are never returned: its IV runs 9-11 vol points low on
     identical bid/ask (FINDINGS section 4), and this engine recomputes IV
     anyway, so the only thing yfinance could contribute is a worse quote.
+
+    Only the standard contracts: the symbol's root must be the ticker itself
+    (or SPXW / NDXP for the indexes). From 2026-11-02 Cboe's SPY, NVDA and TSLA
+    chains also carry B1SPY / B1VDA / B1SLA contracts priced at ~3-4% of the
+    standard option at the same strike; one of them at the money set SPY's vol
+    to 2% on 2026-11-09. SPXO (from 2026-11-09) is left out the same way.
     """
     where = ""
     if symbols:
         joined = ", ".join(f"'{s}'" for s in symbols)
         where = f"and underlying in ({joined})"
+    other_roots = " or ".join(f"(underlying = '{u}' and root = '{r}')"
+                              for u, r in EXTRA_ROOTS.items())
     df = _q(f"""
         select underlying, contract_symbol, option_type, expiry, strike,
                bid, ask, last_price, last_trade_time_utc, volume, open_interest,
                source_iv, source_delta
-        from {_src('option_quotes')}
+        from (select *, regexp_extract(contract_symbol, '^[A-Z]+') as root
+              from {_src('option_quotes')})
         where cycle_id = '{cycle_id}' and source = 'cboe'
           and bid > 0 and (open_interest >= 100 or volume > 0) {where}
+          and (root = underlying or {other_roots})
     """)
     df["expiry"] = pd.to_datetime(df["expiry"], errors="coerce")
     df["last_trade_time_utc"] = pd.to_datetime(df["last_trade_time_utc"],
