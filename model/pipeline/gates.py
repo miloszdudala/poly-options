@@ -11,6 +11,7 @@ rules out the markets it catches (`gate` = its reason). Available gates:
 | `earnings_gap` | an earnings date between the deadline and the expiry the vol came from | decided with the ATM rule: the expiry's vol carries a jump the barrier never sees |
 | `quote_ahead_of_book` | chain prints newer than the book (`quote_age_s < 0`) | review 2026-09-16 |
 | `stale_book` | books untouched for longer than `inputs.stale_book_s` | available, not used |
+| `opening` | books read in the first `opening_minutes` (30) after the 9:30 ET open | decided 2026-11-16: option vols jump ~3x more per 15 min then, and replayed bets placed then lost (-2% vs +6% later) |
 """
 from __future__ import annotations
 
@@ -73,9 +74,15 @@ def stale_book(m, cycle, p) -> pd.Series:
     return m["stale_book"].fillna(False).astype(bool)
 
 
+def opening(m, cycle, p) -> pd.Series:
+    local = pd.to_datetime(m["fetched_at_utc"], utc=True).dt.tz_convert("America/New_York")
+    minutes = local.dt.hour * 60 + local.dt.minute - (9 * 60 + 30)
+    return pd.Series((minutes < p.get("opening_minutes", 30)).values, index=m.index)
+
+
 GATES = {"touch_pending": touch_pending, "no_fair": no_fair, "deep_otm": deep_otm,
          "earnings_gap": earnings_gap, "quote_ahead_of_book": quote_ahead_of_book,
-         "stale_book": stale_book}
+         "stale_book": stale_book, "opening": opening}
 
 
 @variant("gates", "standard")

@@ -29,9 +29,9 @@ def totals(name, overrides=None):
 
 
 @pytest.mark.parametrize("name,expected", [
-    ("mvp", (8, 1140.18, -62.68, 8)),
+    ("mvp", (8, 1124.07, -46.57, 8)),          # barrier-strike vol (2026-11-14)
     ("control", (8, 572.50, -150.99, 8)),
-    ("hit_monthly", (3, 157.26, -32.45, 1)),
+    ("hit_monthly", (3, 216.01, -32.45, 1)),
     ("close_above_weekly", (6, 627.33, 362.17, 6)),
 ])
 def test_the_replays_match_the_code_before_the_restructure(synthetic_store, name, expected):
@@ -57,8 +57,8 @@ def test_the_cache_is_read_back_and_keyed_by_the_settings(synthetic_store):
     assert list(again["market_id"]) == list(first["market_id"])
     pd.testing.assert_series_equal(first["fair"], again["fair"], check_dtype=False)
     assert list(again["gate"].isna()) == list(first["gate"].isna())
-    strike = configs.load("mvp", ["vol.use=strike_first_expiry_after"])
-    assert cache.key(strike) != cache.key(config)
+    atm = configs.load("mvp", ["vol.use=atm_first_expiry_after"])
+    assert cache.key(atm) != cache.key(config)
     assert cache.key(configs.load("mvp", ["bar.min_ev=0.10"])) == cache.key(config)
 
 
@@ -99,3 +99,10 @@ def test_a_sample_cut_from_a_store_replays_on_its_own(synthetic_store, tmp_path)
     store.use(out)
     result = replay.run(configs.load("mvp"), DATES)
     assert result.positions and {p.ticker for p in result.positions} == {"NVDA"}
+
+
+def test_the_opening_gate_rules_out_books_read_before_ten():
+    from pipeline import gates
+    m = pd.DataFrame({"fetched_at_utc": ["2026-11-16T14:45:00Z", "2026-11-16T15:00:00Z",
+                                         "2026-11-16T15:15:00Z"]})        # 9:45, 10:00, 10:15 ET
+    assert list(gates.opening(m, None, {"opening_minutes": 30})) == [True, False, False]

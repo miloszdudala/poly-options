@@ -2,8 +2,8 @@
 
 | variant | vol | decided / open |
 |---|---|---|
-| `atm_first_expiry_after` | the at-the-money vol of the first expiry whose 16:00 ET close is at or after the deadline | **decided** (Brier 0.0912 on 7,750 resolved, 2026-11-03) |
-| `strike_first_expiry_after` | the same expiry's vol at the barrier's moneyness | measured worse (0.0922); kept to compare (`lab.py`) |
+| `strike_first_expiry_after` | the vol at the barrier's moneyness of the first expiry whose 16:00 ET close is at or after the deadline; with `min_rel_volume`, only from serious strikes (`maths.barrier_vol`, `max_gap`) | **decided** 2026-11-14 (the MVP) |
+| `atm_first_expiry_after` | the same expiry's at-the-money vol | replaced 2026-11-14: it ignores the skew; kept to compare |
 | `none` | no vol (the chain-priced types read the call spread directly) | extension |
 
 Shared choices (parameters): a chain older than `stale_chain_s` (1,800 s) is
@@ -53,6 +53,9 @@ def _clocks(close: pd.Timestamp, quote_time, book_time: pd.Timestamp) -> tuple[f
     return years_cal, years_model
 
 
+NO_SERIOUS = "no vol: no serious-volume strikes close around the barrier"
+
+
 def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) -> pd.DataFrame:
     stale_s = p.get("stale_chain_s", 1800.0)
     symbols = tuple(sorted(m["ticker"].dropna().unique()))
@@ -63,10 +66,10 @@ def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) 
     closes_by_ticker = cycle.memo("closes_by_ticker", dict)
     smiles = cycle.memo("smiles", dict)
     out = {c: [] for c in ("sigma", "expiry", "expiry_close", "exact_expiry", "clamped",
-                           "n_strikes", "s_quote")}
+                           "n_strikes", "s_quote", "vol_why")}
     for row, live in zip(m.itertuples(), alive(m)):
         values = dict(sigma=np.nan, expiry=None, expiry_close=pd.NaT, exact_expiry=False,
-                      clamped=False, n_strikes=0, s_quote=np.nan)
+                      clamped=False, n_strikes=0, s_quote=np.nan, vol_why=None)
         if live:
             ticker = row.ticker
             sym_chain = chain[chain["underlying"] == ticker]
@@ -91,6 +94,19 @@ def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) 
                 smile = smiles[key]
                 x = math.log(row.level / s_quote) if at_barrier else 0.0
                 sigma, clamped = maths.expiry_vol(smile, x)
+                if at_barrier and p.get("min_rel_volume"):
+                    skey = (ticker, expiry, "serious")
+                    if skey not in smiles:
+                        cal, model_years = _clocks(close, row.quote_time, clock[ticker])
+                        smiles[skey] = maths.build_smile(
+                            sym_chain, s_quote, expiry, cal, model_years, rate,
+                            min_rel_volume=p["min_rel_volume"])
+                    serious = smiles[skey]
+                    vol, clamped = maths.barrier_vol(serious, x, p.get("max_gap", 0.03))
+                    sigma = (math.sqrt(vol ** 2 * serious.years_cal / serious.years_model)
+                             if np.isfinite(vol) and serious.years_model > 0 else float("nan"))
+                    if not np.isfinite(sigma):
+                        values["vol_why"] = NO_SERIOUS
                 values.update(sigma=sigma, expiry=str(expiry.date()), expiry_close=close,
                               exact_expiry=bool(close == row.deadline), clamped=clamped,
                               n_strikes=smile.n_contracts)

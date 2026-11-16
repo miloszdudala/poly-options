@@ -38,14 +38,20 @@ money now; real money (starting at $50-100) later.
 ## Decided
 
 - **Pricing a hit (one-touch) market:** touch probability over **regular hours
-  only** (the market's own rule), with the **at-the-money implied vol** of the
-  first expiry at or after the deadline. The split of variance between session
-  and overnight (`f`) comes from each stock's past daily bars: the one accepted
-  exception to "option prices only", decided 2026-11-05. Scored on 9,272
-  observations of markets past their deadline: regular hours + ATM Brier 0.0788,
-  regular hours + barrier-strike vol 0.0792, continuous + ATM 0.0799, continuous
-  + barrier-strike vol 0.0811. Earlier scores included unfinished markets, which
-  only appear as resolved once touched, and are not comparable.
+  only** (the market's own rule), with the **implied vol at the barrier strike**
+  of the first expiry at or after the deadline (2026-11-14; ATM vol from
+  2026-11-04 ignored the skew and lost money). The split of variance between
+  session and overnight (`f`) comes from each stock's past daily bars: the one
+  accepted exception to "option prices only", decided 2026-11-05. Judge a
+  pricing rule by what the bets it takes earn, not by Brier over all markets:
+  Brier had ATM 0.0788 vs barrier 0.0792, while on deadlines Oct 2 - Nov 6 ATM
+  lost $961 on $89.8k and barrier vol made $2,574 on $33.5k. ATM's extra bets
+  were mostly NO on downside barriers, where the skew it ignores matters most.
+- **Barrier vol from serious strikes only** (2026-11-16): a strike counts if
+  its volume today is at least 5% of the expiry's busiest; the nearest on each
+  side of the barrier are interpolated if at most 3% of the price apart (one
+  side only: the nearest, if within 3% of the barrier), otherwise no bet.
+  **No bets in the first 30 minutes** after the open.
 - **Fills:** a fill counts if the book had the size when we looked. The ~40 s
   recheck showed 80-88% of filled dollars still buyable, so there is no
   separate "confirmed" ledger.

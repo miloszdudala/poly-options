@@ -143,7 +143,7 @@ class Smile:
 
 def build_smile(chain: pd.DataFrame, spot: float, expiry, years_cal: float,
                 years_model: float, rate: float = 0.0,
-                log: "callable | None" = None) -> Smile:
+                log: "callable | None" = None, min_rel_volume: float = 0.0) -> Smile:
     """OTM contracts of one expiry, with IV recomputed from the bid/ask mid.
 
     MODELS 3.2: puts below spot, calls above, IV from the mid rather than from
@@ -155,6 +155,13 @@ def build_smile(chain: pd.DataFrame, spot: float, expiry, years_cal: float,
     rows = chain[chain["expiry"] == expiry]
     otm = rows[((rows["option_type"] == "put") & (rows["strike"] < spot))
                | ((rows["option_type"] == "call") & (rows["strike"] >= spot))]
+    if min_rel_volume > 0:
+        # Only "serious" strikes: today's volume at least `min_rel_volume` of
+        # the busiest contract of the expiry. Volume accumulates over the day,
+        # so the share, not a count, means the same at 10:00 and at 15:00:
+        # spreads by share were flat across the day (2026-11-16), by count not.
+        top = rows["volume"].max() if len(rows) else 0
+        otm = otm[otm["volume"] >= min_rel_volume * top] if top > 0 else otm.iloc[0:0]
     if otm.empty or not (np.isfinite(years_cal) and years_cal > 0):
         return Smile(expiry, years_cal, years_model, np.array([]), np.array([]), 0)
 
@@ -174,6 +181,30 @@ def build_smile(chain: pd.DataFrame, spot: float, expiry, years_cal: float,
     x = np.log(otm["strike"].values[keep] / spot)
     order = np.argsort(x)
     return Smile(expiry, years_cal, years_model, x[order], vols[keep][order], int(keep.sum()))
+
+
+def barrier_vol(smile: "Smile", x: float, max_gap: float) -> tuple[float, bool]:
+    """Calendar-clock vol at the barrier (log-moneyness `x`) from serious strikes.
+
+    The nearest strike on each side of the barrier, interpolated, if the two
+    are at most `max_gap` (a share of the price) apart. With strikes on one
+    side only, the nearest one, if it is within `max_gap` of the barrier.
+    Otherwise nan: two strikes far apart, or one far away, say nothing about
+    the barrier. Returns `(vol, one_sided)`.
+    """
+    xs, vols = smile.log_moneyness, smile.vols
+    if len(xs) == 0:
+        return float("nan"), False
+    below, above = xs[xs <= x], xs[xs >= x]
+    if len(below) and len(above):
+        lo, hi = below[-1], above[0]
+        if math.exp(hi) - math.exp(lo) > max_gap:
+            return float("nan"), False
+        return float(np.interp(x, xs, vols)), False
+    near = below[-1] if len(below) else above[0]
+    if abs(math.exp(near) - math.exp(x)) > max_gap:
+        return float("nan"), True
+    return float(vols[xs == near][0]), True
 
 
 def first_expiry_at_or_after(expiry_closes: list, deadline):

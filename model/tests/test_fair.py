@@ -328,3 +328,44 @@ def test_intraday_share_is_near_zero_when_everything_gaps():
 def test_intraday_share_refuses_to_guess_from_too_little_data():
     assert math.isnan(fair.intraday_variance_share([100.0, 101.0], [100.5, 101.5]))
     assert math.isnan(fair.intraday_variance_share([100.0] * 80, [100.0] * 79))
+
+
+# ------------------------------------------- barrier vol from serious strikes
+
+
+def _smile(strikes, vols, spot=100.0):
+    x = np.log(np.asarray(strikes, dtype=float) / spot)
+    return fair.Smile(pd.Timestamp("2026-11-20"), 0.02, 0.02, x, np.asarray(vols, float),
+                       len(strikes))
+
+
+def test_barrier_vol_interpolates_between_close_serious_neighbours():
+    smile = _smile([95, 97, 103], [0.40, 0.36, 0.30])
+    vol, one_sided = fair.barrier_vol(smile, math.log(96 / 100), max_gap=0.03)
+    assert vol == pytest.approx(0.38, abs=1e-3) and not one_sided
+
+
+def test_barrier_vol_refuses_neighbours_too_far_apart():
+    smile = _smile([90, 97], [0.45, 0.36])
+    vol, _ = fair.barrier_vol(smile, math.log(93 / 100), max_gap=0.03)
+    assert math.isnan(vol)
+
+
+def test_barrier_vol_beyond_the_last_serious_strike_takes_it_only_when_close():
+    smile = _smile([95, 97], [0.40, 0.36])
+    near, one_sided = fair.barrier_vol(smile, math.log(93 / 100), max_gap=0.03)
+    far, _ = fair.barrier_vol(smile, math.log(90 / 100), max_gap=0.03)
+    assert near == pytest.approx(0.40) and one_sided and math.isnan(far)
+
+
+def test_build_smile_keeps_only_strikes_with_a_share_of_the_top_volume():
+    chain = pd.DataFrame({
+        "expiry": pd.Timestamp("2026-11-20"), "option_type": ["put", "put", "call", "call"],
+        "strike": [95.0, 97.0, 103.0, 105.0], "volume": [1000, 10, 2000, 100],
+        "source_iv": 0.3, "open_interest": 500, "contract_symbol": list("abcd"),
+    })
+    chain["mid"] = fair.bs_price(100.0, chain["strike"], 0.02, 0.3, 0.0,
+                                  (chain["option_type"] == "call").values)
+    smile = fair.build_smile(chain, 100.0, pd.Timestamp("2026-11-20"), 0.02, 0.02,
+                              min_rel_volume=0.05)
+    assert np.allclose(np.exp(smile.log_moneyness) * 100, [95.0, 103.0, 105.0])          # 97 traded 10 < 5% of 2000

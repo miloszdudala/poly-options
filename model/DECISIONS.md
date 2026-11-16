@@ -27,7 +27,9 @@ for seeing what a step did to every market of one cycle.
 | 2 inputs | no bar: Cboe's 15-minute-delayed last | `inputs.hit` | guess | rare; flagged `spot_source` | `lab inspect` |
 | 2 inputs | refuse a cycle whose 5-minute bars have not arrived | `inputs.require_bars` | decided | review 2026-10-09: 40 fills on printed barriers | - |
 | 2 inputs | time = NYSE session time to the deadline | `inputs.hit` | decided | weekends carry no monitoring | - |
-| 3 vol | ATM vol of the first expiry at or after the deadline | `vol.use` | decided | Brier 0.0912 vs barrier-strike 0.0922 (7,750 resolved, 2026-11-03) | `lab score --vary vol.use=...` |
+| 3 vol | vol at the barrier strike, first expiry at or after the deadline | `vol.use` | decided (2026-11-14) | ATM ignores the skew; on deadlines Oct 2 - Nov 6 ATM lost $961 on $89.8k, barrier vol made $2,574 on $33.5k. Brier (ATM 0.0912 vs 0.0922) averages over markets never traded | `lab sweep --vary vol.use=...` |
+| 3 vol | barrier vol only from serious strikes: volume today >= 5% of the expiry's busiest; nearest on each side interpolated if <= 3% of the price apart, one side only if within 3% of the barrier, else no bet | `vol.min_rel_volume`, `vol.max_gap` | decided (2026-11-16) | spread ~17% at >= 5% share vs 30-40% below 0.5%, flat across the day; keeps ~77% of priceable markets | `lab sweep --vary vol.min_rel_volume=...` |
+| 5 gates | no bets in the first 30 minutes after the open | `gates.drop: opening`, `opening_minutes` | decided (2026-11-16) | IV moves ~3x more per 15 min then; replayed bets placed then -2% vs +6% later | - |
 | 3 vol | chain older than 30 minutes = no chain | `vol.stale_chain_s` | guess | first 15-30 min of a session carry yesterday's prints (2026-09-18) | `lab score --vary vol.stale_chain_s=900,1800,3600` |
 | 3 vol | contracts with OI >= 100 or volume > 0, bid > 0 | `store.option_chain` | decided | FINDINGS 4: untraded IVs disagree by 59 points at p90 | - |
 | 3 vol | IV recomputed from the mid, OTM only, flat outside the liquid strikes | `maths.build_smile` | guess (flat = conservative) | FINDINGS 5.2 | - |

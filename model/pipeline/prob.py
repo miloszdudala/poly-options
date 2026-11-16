@@ -35,6 +35,11 @@ def _priceable(m: pd.DataFrame) -> pd.Series:
 NO_VOL = "no vol: no fresh chain or no expiry after the deadline"
 
 
+def vol_why(m: pd.DataFrame) -> pd.Series:
+    """Why a market has no vol: the vol step's own reason, or no chain."""
+    return m["vol_why"].fillna(NO_VOL) if "vol_why" in m else pd.Series(NO_VOL, index=m.index)
+
+
 @variant("prob", "one_touch")
 def one_touch(m: pd.DataFrame, cycle: Cycle, p: dict) -> pd.DataFrame:
     ok = _priceable(m)
@@ -45,7 +50,7 @@ def one_touch(m: pd.DataFrame, cycle: Cycle, p: dict) -> pd.DataFrame:
                                           sub["T_years"].astype(float), sub["sigma"].astype(float),
                                           sub["rate"].astype(float), sub["yes_direction"].values)
     m["fair"] = fair
-    m["why"] = np.where(ok, None, NO_VOL)
+    m["why"] = np.where(ok, None, vol_why(m))
     return m
 
 
@@ -80,7 +85,7 @@ def regular_hours(m: pd.DataFrame, cycle: Cycle, p: dict) -> pd.DataFrame:
                                             row.contract_type == "hit_up", pool)
                     if priceable else np.nan)
     m["fair"], m["f"] = fair, f_used
-    m["why"] = np.where(ok, None, NO_VOL)
+    m["why"] = np.where(ok, None, vol_why(m))
     return m
 
 

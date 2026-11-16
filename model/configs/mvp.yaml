@@ -12,9 +12,11 @@ inputs:                                     # 2. spot from 5-minute bars; refuse
   use: hit
   require_bars: true
   stale_book_s: 900
-vol:                                        # 3. decided: ATM vol, first expiry at or after the deadline
-  use: atm_first_expiry_after
+vol:                                        # 3. decided: vol at the barrier strike, first expiry at or after the deadline
+  use: strike_first_expiry_after
   stale_chain_s: 1800
+  min_rel_volume: 0.05                      #    decided 2026-11-16: a strike counts if its volume today is >= 5% of the expiry's busiest
+  max_gap: 0.03                             #    nearest serious strikes either side at most 3% of the price apart, else no bet
 prob:                                       # 4. decided: touch over regular hours only
   use: regular_hours
   default_f: 0.6                            #    guess: f when under min_sessions of daily bars
@@ -24,7 +26,8 @@ prob:                                       # 4. decided: touch over regular hou
   seed: 20260916
 gates:                                      # 5. which priced markets may be traded, in this order
   use: standard
-  drop: [touch_pending, no_fair, deep_otm, earnings_gap, quote_ahead_of_book]
+  drop: [opening, touch_pending, no_fair, deep_otm, earnings_gap, quote_ahead_of_book]
+  opening_minutes: 30                       #    decided 2026-11-16: no bets in the first 30 minutes
   deep_otm_sd: 2.5
 fee:                                        # 6. decided: the market's own schedule at the time;
   use: polymarket                           #    rate x (p(1-p))^exponent, 0.04 if never recorded
