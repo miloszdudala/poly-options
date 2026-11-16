@@ -44,8 +44,8 @@ for seeing what a step did to every market of one cycle.
 | 5 gates | barrier over 2.5 ATM standard moves away: not traded | `gates.deep_otm_sd` | guess | FINDINGS 5.2 (fair 0.002-0.147 on one barrier) | `lab score --vary gates.deep_otm_sd=2,2.5,3` |
 | 5 gates | chain prints newer than the book: not traded | `gates.drop: quote_ahead_of_book` | decided | review 2026-09-16 | - |
 | 6 fee | the market's own schedule at the time: `rate x (p(1-p))^exponent`; 0.04 if never recorded | `fee.use: polymarket` | decided ("true venue fees") | most markets went to zero fees 2026-10-20 to 10-30 | - |
-| 7 bar | EV >= 3c and return >= 8% | `bar.min_ev`, `bar.min_roi` | open | | `lab sweep --vary bar.min_ev=...` |
-| 7 bar | above 90c: return >= 2% instead | `bar.dear_*` | open | 3c on a 95c NO is never on offer | `lab sweep --vary bar.dear_min_roi=...` |
+| 7 bar | EV >= 3c at every price | `bar.min_ev`, `bar.dear_min_ev` | decided (2026-11-16) | paper, 2 weeks: above 90c with EV < 3c = 55% of the money, 12% of the EV, -$59 (two losses); sample of 8 days: cuts 19% of the money, 4% of the EV | `lab sweep --vary bar.dear_min_ev=...` |
+| 7 bar | return >= 8%; above 90c, >= 2% | `bar.min_roi`, `bar.dear_min_roi` | open | | `lab sweep --vary bar.dear_min_roi=...` |
 | 7 bar | YES charged a 2c risk premium | `bar.yes_premium` | decided (2026-10-09) | INSIGHTS 7.2 | - |
 | 8 sizing | take every offer, as large as the book allows | `sizing.use: edge_taker` | decided (MVP) | the hedged books are the user's to write | - |
 | 8 sizing | offers best return first | `offers.make_offers` | guess | matters only when cash is limited | - |

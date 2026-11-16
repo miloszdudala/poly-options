@@ -104,10 +104,12 @@ every choice and whether it is decided, open or a guess.
 - The design of the two hedged books, including how much imbalance to allow.
   The user designs this and writes them as model files after the refactor.
   No task waits for it.
-- The bar a bet must clear. Today: EV >= 3c a share **and** return >= 8%;
-  above a 90c ask, return >= 2%; every YES charged a 2c risk premium first.
-  Only the risk premium was approved (2026-10-09). Each model declares its
-  bar; keep today's unchanged until the user decides.
+- The bar a bet must clear. Today: EV >= 3c a share at every price **and**
+  return >= 8%; above a 90c ask, return >= 2%; every YES charged a 2c risk
+  premium first. Approved: the risk premium (2026-10-09) and EV >= 3c also
+  above 90c (2026-11-16: in two weeks of paper, bets above 90c with EV under
+  3c took 55% of the money for 12% of the EV and lost $59). The return
+  floors are still open. Each model declares its bar.
 - Whether gold, silver and the dollar index get the same conversion as WTI.
 
 ## Layout

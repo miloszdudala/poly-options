@@ -32,11 +32,11 @@ gates:                                      # 5. which priced markets may be tra
 fee:                                        # 6. decided: the market's own schedule at the time;
   use: polymarket                           #    rate x (p(1-p))^exponent, 0.04 if never recorded
   rate: 0.04
-bar:                                        # 7. Open: only yes_premium is approved (2026-10-09)
+bar:                                        # 7. approved: yes_premium (2026-10-09), EV >= 3c at every price (2026-11-16)
   min_ev: 0.03
   min_roi: 0.08
   dear_price: 0.90
-  dear_min_ev: 0.0
+  dear_min_ev: 0.03
   dear_min_roi: 0.02
   yes_premium: 0.02
 sizing:                                     # 8. the model
