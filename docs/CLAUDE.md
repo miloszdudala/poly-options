@@ -52,6 +52,8 @@ money now; real money (starting at $50-100) later.
   side of the barrier are interpolated if at most 3% of the price apart (one
   side only: the nearest, if within 3% of the barrier), otherwise no bet.
   **No bets in the first 30 minutes** after the open.
+  **No bets on a stock from now until its earnings report** when the report
+  falls before the deadline; after the report it trades again.
 - **Fills:** a fill counts if the book had the size when we looked. The ~40 s
   recheck showed 80-88% of filled dollars still buyable, so there is no
   separate "confirmed" ledger.

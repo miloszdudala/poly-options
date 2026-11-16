@@ -106,3 +106,15 @@ def test_the_opening_gate_rules_out_books_read_before_ten():
     m = pd.DataFrame({"fetched_at_utc": ["2026-11-16T14:45:00Z", "2026-11-16T15:00:00Z",
                                          "2026-11-16T15:15:00Z"]})        # 9:45, 10:00, 10:15 ET
     assert list(gates.opening(m, None, {"opening_minutes": 30})) == [True, False, False]
+
+
+def test_the_earnings_gate_holds_until_the_report_and_lets_go_after(monkeypatch):
+    from pipeline import gates
+    when = pd.Timestamp("2026-11-17T21:00:00Z")                         # Tuesday, after the close
+    monkeypatch.setattr(store, "upcoming_earnings", lambda: pd.DataFrame({
+        "symbol": ["NVDA"], "when": [when], "first_seen": [pd.Timestamp("2026-09-16", tz="UTC")]}))
+    deadline = pd.Timestamp("2026-11-20T21:00:00Z")
+    m = pd.DataFrame({"ticker": ["NVDA", "NVDA", "AMD"], "deadline": deadline,
+                      "fetched_at_utc": ["2026-11-17T18:00:00Z", "2026-11-18T15:00:00Z",
+                                         "2026-11-17T18:00:00Z"]})
+    assert list(gates.earnings_inside(m, None, {})) == [True, False, False]

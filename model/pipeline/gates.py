@@ -9,6 +9,7 @@ rules out the markets it catches (`gate` = its reason). Available gates:
 | `no_fair` | markets the prob step could not price (its `why`) | - |
 | `deep_otm` | barrier more than `deep_otm_sd` (2.5) ATM standard moves away, or no vol | 2.5 is a guess (FINDINGS 5.2: fair 0.002-0.147 on one SPY barrier depending on the vol) |
 | `earnings_gap` | an earnings date between the deadline and the expiry the vol came from | decided with the ATM rule: the expiry's vol carries a jump the barrier never sees |
+| `earnings_inside` | an earnings date between the book and the deadline: until the report, the expiry's vol carries one jump that the touch formula spreads over every session, overstating touches of nearby barriers; after it, the market trades again | decided 2026-11-16 (the reporting stock only) |
 | `quote_ahead_of_book` | chain prints newer than the book (`quote_age_s < 0`) | review 2026-09-16 |
 | `stale_book` | books untouched for longer than `inputs.stale_book_s` | available, not used |
 | `opening` | books read in the first `opening_minutes` (30) after the 9:30 ET open | decided 2026-11-16: option vols jump ~3x more per 15 min then, and replayed bets placed then lost (-2% vs +6% later) |
@@ -66,6 +67,13 @@ def earnings_gap(m, cycle, p) -> pd.Series:
                      index=m.index)
 
 
+def earnings_inside(m, cycle, p) -> pd.Series:
+    return pd.Series([bool(store.earnings_between(t, pd.Timestamp(fetched), deadline,
+                                                  as_of=fetched))
+                      for t, deadline, fetched in
+                      zip(m["ticker"], m["deadline"], m["fetched_at_utc"])], index=m.index)
+
+
 def quote_ahead_of_book(m, cycle, p) -> pd.Series:
     return m["quote_age_s"] < 0
 
@@ -81,7 +89,8 @@ def opening(m, cycle, p) -> pd.Series:
 
 
 GATES = {"touch_pending": touch_pending, "no_fair": no_fair, "deep_otm": deep_otm,
-         "earnings_gap": earnings_gap, "quote_ahead_of_book": quote_ahead_of_book,
+         "earnings_gap": earnings_gap, "earnings_inside": earnings_inside,
+         "quote_ahead_of_book": quote_ahead_of_book,
          "stale_book": stale_book, "opening": opening}
 
 

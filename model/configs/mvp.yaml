@@ -26,7 +26,7 @@ prob:                                       # 4. decided: touch over regular hou
   seed: 20260916
 gates:                                      # 5. which priced markets may be traded, in this order
   use: standard
-  drop: [opening, touch_pending, no_fair, deep_otm, earnings_gap, quote_ahead_of_book]
+  drop: [opening, touch_pending, no_fair, deep_otm, earnings_gap, earnings_inside, quote_ahead_of_book]
   opening_minutes: 30                       #    decided 2026-11-16: no bets in the first 30 minutes
   deep_otm_sd: 2.5
 fee:                                        # 6. decided: the market's own schedule at the time;
