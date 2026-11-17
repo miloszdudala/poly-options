@@ -266,6 +266,18 @@ def cboe_spot(cycle_id: str) -> pd.DataFrame:
     return df
 
 
+def live_quotes(cycle_id: str) -> pd.DataFrame:
+    """Tiingo's live price, read just before the cycle's books, with the day's
+    regular-session high and low (data/src/live.py). Empty before 2026-11-17."""
+    cols = ["symbol", "last_price", "high", "low", "fetched_at_utc"]
+    if not any((ROOT / "underlying_quotes").glob(f"date={cycle_date(cycle_id)}/*.parquet")):
+        return pd.DataFrame(columns=cols)
+    return _q(f"""
+        select {', '.join(cols)} from {_src('underlying_quotes')}
+        where cycle_id = '{cycle_id}' and source = 'tiingo' and last_price > 0
+    """)
+
+
 # ------------------------------------------------------------------- bars
 
 

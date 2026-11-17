@@ -2,7 +2,7 @@
 
 | variant | what it sets | decided / open |
 |---|---|---|
-| `hit` | `spot` (open of the 5-minute bar containing the fetch; Cboe's delayed last if none), `T_sessions` / `T_years` (NYSE session time to the deadline), `quote_age_s` | decided (review 2026-09-18) |
+| `hit` | `spot` (Tiingo's live price read just before the books, from 2026-11-17; else the open of the 5-minute bar containing the fetch; else Cboe's delayed last), `day_high` / `day_low` (Tiingo's, regular session so far), `T_sessions` / `T_years` (NYSE session time to the deadline), `quote_age_s` | decided (review 2026-09-18) |
 | `chain` | `quote_time`, `years` (calendar years from the quote to the deadline), and for up/down the `level`: the previous trading day's close (matches the result on 98.7% of 760 resolved markets, 2026-11-04; today's open 74%); "Opens Up or Down" markets ruled out | extension |
 | `wti` | see `wti.py` | extension |
 
@@ -38,6 +38,13 @@ def hit(markets: pd.DataFrame, cycle: Cycle, p: dict) -> pd.DataFrame:
     m["spot"] = store.spot_at(m["fetched_at_utc"], m["ticker"])
     m["spot_source"] = np.where(m["spot"].notna(), "bar_5m", "cboe_delayed")
     m["spot"] = m["spot"].fillna(m["ticker"].map(cycle.cboe_spot()))
+    live = cycle.live()
+    if len(live):
+        last = m["ticker"].map(live["last_price"])
+        m["spot_source"] = np.where(last.notna(), "tiingo", m["spot_source"])
+        m["spot"] = last.fillna(m["spot"])
+        m["day_high"] = m["ticker"].map(live["high"])
+        m["day_low"] = m["ticker"].map(live["low"])
     m["T_sessions"] = sessions_remaining(m["fetched_at_utc"].values, m["deadline"].values,
                                          sessions())
     m["T_years"] = m["T_sessions"] / TRADING_DAYS

@@ -5,7 +5,7 @@ rules out the markets it catches (`gate` = its reason). Available gates:
 
 | gate | rules out | decided / open |
 |---|---|---|
-| `touch_pending` | spot already beyond the barrier, or a finished regular-hours bar has printed it since the market began being watched (fair set to 1) | decided (review 2026-09-18: a touch is a path) |
+| `touch_pending` | spot already beyond the barrier, or a finished regular-hours bar has printed it since the market began being watched, or (from 2026-11-17) Tiingo's live day high/low has, for a market watched since today's open (fair set to 1) | decided (review 2026-09-18: a touch is a path; live price 2026-11-17 after MSFT 525 was touched seconds before the book) |
 | `no_fair` | markets the prob step could not price (its `why`) | - |
 | `deep_otm` | barrier more than `deep_otm_sd` (2.5) ATM standard moves away, or no vol | 2.5 is a guess (FINDINGS 5.2: fair 0.002-0.147 on one SPY barrier depending on the vol) |
 | `earnings_gap` | an earnings date between the deadline and the expiry the vol came from | decided with the ATM rule: the expiry's vol carries a jump the barrier never sees |
@@ -43,10 +43,22 @@ def touch_pending(m: pd.DataFrame, cycle: Cycle, p: dict) -> pd.Series:
             if pd.notna(start):
                 already = bool(store.touched_between(row.ticker, row.level, up, start,
                                                      row.fetched_at_utc))
+            # The live day high/low covers the session up to the book, which
+            # finished bars miss; usable only if the market watched from the open.
+            extreme = getattr(row, "day_high" if up else "day_low", float("nan"))
+            if not already and pd.notna(start) and pd.notna(extreme) \
+                    and start <= session_open(row.fetched_at_utc):
+                already = bool(extreme >= row.level) if up else bool(extreme <= row.level)
         pending.append(bool(already))
     pending = pd.Series(pending, index=m.index)
     m.loc[pending, "fair"] = 1.0
     return pending
+
+
+def session_open(when) -> pd.Timestamp:
+    """09:30 ET on the day of `when`, in UTC."""
+    local = pd.Timestamp(when).tz_convert("America/New_York")
+    return local.normalize().replace(hour=9, minute=30).tz_convert("UTC")
 
 
 def no_fair(m, cycle, p) -> pd.Series:

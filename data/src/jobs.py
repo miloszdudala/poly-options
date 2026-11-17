@@ -112,6 +112,12 @@ def job_snapshot(run: Run) -> None:
     run.counts.update(refresh_events(run.http, run.cycle_id))
     markets = tracked_markets() or markets
 
+    # Live prices immediately before the books: never newer than any book,
+    # and only seconds older (live.py says why).
+    if is_regular_hours():
+        from live import collect_live
+        run.counts.update(collect_live(run.http, run.cycle_id))
+
     book_stats, _books = collect_books(run.http, markets, run.cycle_id)
     run.counts.update(book_stats)
 

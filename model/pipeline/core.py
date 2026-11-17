@@ -108,6 +108,10 @@ class Cycle:
         return self.memo("cboe_spot", lambda: store.cboe_spot(self.id)
                          .set_index("symbol")["last_price"])
 
+    def live(self) -> pd.DataFrame:
+        """Tiingo's live price and day high/low per symbol (empty before 2026-11-17)."""
+        return self.memo("live", lambda: store.live_quotes(self.id).set_index("symbol"))
+
     def rate(self, when) -> float:
         return self.memo(("rate", str(when)[:10]), lambda: store.risk_free_rate(when))
 

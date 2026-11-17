@@ -7,3 +7,6 @@ __pycache__/
 .pytest_cache/
 model/store/
 model/samples/
+
+# local secrets (data API keys)
+.env
