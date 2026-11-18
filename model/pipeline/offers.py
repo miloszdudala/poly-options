@@ -57,7 +57,7 @@ class Bar:
     dear_price: float = 0.90
     dear_min_ev: float = 0.03
     dear_min_roi: float = 0.02
-    yes_premium: float = 0.02
+    yes_premium: float = 0.0
 
     def value(self, win_prob: float, side: str) -> float:
         return win_prob - (self.yes_premium if side == YES else 0.0)

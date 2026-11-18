@@ -14,7 +14,7 @@ def fixture_ledger(tmp_path, monkeypatch, world):
     monkeypatch.setattr(results.ledger_schema, "STORE", tmp_path / "store")
     monkeypatch.setattr(results, "REPORTS", tmp_path / "reports")
     world({MON: (asks(MON, "a", yes=((0.20, 100.0),)), [priced("a")]),
-           TUE: (asks(TUE, "b", no=((0.30, 100.0),)), [priced("b", fair=0.50)]),
+           TUE: (asks(TUE, "b", yes=((0.60, 100.0),), no=((0.30, 100.0),)), [priced("b", fair=0.50)]),
            NEXT_MON: (asks(NEXT_MON, "c", yes=((0.20, 100.0),)), [priced("c")])},
           [resolved("a", "Yes"), resolved("b", "Yes")])
     results.write_run(run())

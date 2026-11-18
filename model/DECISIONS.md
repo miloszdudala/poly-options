@@ -46,8 +46,8 @@ for seeing what a step did to every market of one cycle.
 | 6 fee | the market's own schedule at the time: `rate x (p(1-p))^exponent`; 0.04 if never recorded | `fee.use: polymarket` | decided ("true venue fees") | most markets went to zero fees 2026-10-20 to 10-30 | - |
 | 7 bar | EV >= 3c at every price | `bar.min_ev`, `bar.dear_min_ev` | decided (2026-11-16) | paper, 2 weeks: above 90c with EV < 3c = 55% of the money, 12% of the EV, -$59 (two losses); sample of 8 days: cuts 19% of the money, 4% of the EV | `lab sweep --vary bar.dear_min_ev=...` |
 | 7 bar | return >= 8%; above 90c, >= 2% | `bar.min_roi`, `bar.dear_min_roi` | open | | `lab sweep --vary bar.dear_min_roi=...` |
-| 7 bar | YES charged a 2c risk premium | `bar.yes_premium` | decided (2026-10-09) | INSIGHTS 7.2 | - |
-| 8 sizing | take every offer, as large as the book allows | `sizing.use: edge_taker` | decided (MVP) | the hedged books are the user's to write | - |
+| 7 bar | no YES risk premium (was 2c from 2026-10-09) | `bar.yes_premium: 0` | decided (2026-11-18) | a one-sided charge has no basis; full replay 09-16..11-13: more profit, steadier weeks without it | - |
+| 8 sizing | take every offer, one share of each (was: as large as the book allows) | `sizing.use: fixed_shares` | decided (2026-11-18) | equal payout per bet: 1 losing week of 9 vs 2-3 at max size; paper only, one share is under the $1 minimum | - |
 | 8 sizing | offers best return first | `offers.make_offers` | guess | matters only when cash is limited | - |
 | 8 sizing | one market, one side, once (no averaging down) | `replay.py` | decided | MODELS 4.2 | - |
 | 8 sizing | the control: 12 random bets a cycle, 2c slip | `configs/control.yaml` | guess | a yardstick, not a strategy | - |

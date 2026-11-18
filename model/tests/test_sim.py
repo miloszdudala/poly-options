@@ -26,6 +26,7 @@ TUE = "20260915T140000Z-bbbbbb"
 NEXT_MON = "20260921T140000Z-cccccc"
 DEADLINE = pd.Timestamp("2026-09-18T20:00:00Z")
 TODAYS_BAR = Bar()
+PREMIUM_BAR = Bar(yes_premium=0.02)     # the YES premium mechanism (unused since 2026-11-18)
 FEE = configs.load("mvp")["fee"]
 
 
@@ -81,18 +82,25 @@ def world(monkeypatch):
 
 
 def run(config="mvp", overrides=None):
-    return replay.run(configs.load(config, overrides), ["window"],
-                      settle_through="2026-12-31T00:00:00Z")
+    """The harness tests check accounts and fills, not today's MVP choices, so
+    an mvp run keeps the sizing and premium they were written with."""
+    overrides = list(overrides or [])
+    cfg = configs.load(config, overrides)
+    if config == "mvp" and not any(o.startswith("sizing") for o in overrides):
+        cfg["sizing"] = {"use": "edge_taker"}
+    if config == "mvp" and not any("yes_premium" in o for o in overrides):
+        cfg["bar"]["yes_premium"] = 0.02
+    return replay.run(cfg, ["window"], settle_through="2026-12-31T00:00:00Z")
 
 
 # ------------------------------------------------------------------ the bar
 
 
 def test_the_mvp_config_holds_todays_bar_unchanged():
-    """EV >= 3c at every price; return >= 8%, above 90c >= 2%; YES pays 2c first."""
+    """EV >= 3c at every price; return >= 8%, above 90c >= 2%; no YES premium."""
     bar = configs.load("mvp")["bar"]
     assert bar == {"min_ev": 0.03, "min_roi": 0.08, "dear_price": 0.90, "dear_min_ev": 0.03,
-                   "dear_min_roi": 0.02, "yes_premium": 0.02}
+                   "dear_min_roi": 0.02, "yes_premium": 0.0}
     assert Bar(**bar) == TODAYS_BAR
 
 
@@ -121,8 +129,9 @@ def test_kalshis_fee_is_quadratic_at_seven_percent():
 
 
 def test_a_yes_is_charged_the_premium_and_a_no_is_not():
-    assert TODAYS_BAR.value(0.40, "YES") == pytest.approx(0.38)
-    assert TODAYS_BAR.value(0.60, "NO") == pytest.approx(0.60)
+    assert PREMIUM_BAR.value(0.40, "YES") == pytest.approx(0.38)
+    assert PREMIUM_BAR.value(0.60, "NO") == pytest.approx(0.60)
+    assert TODAYS_BAR.value(0.40, "YES") == pytest.approx(0.40)
 
 
 def test_above_ninety_cents_the_bar_is_three_cents_and_two_percent():
@@ -172,7 +181,7 @@ def test_take_fraction_and_minimum_are_settings():
 # ------------------------------------------------------------------- offers
 
 
-def offers_for(prices, fair=0.40, held=frozenset(), bar=TODAYS_BAR, up=True, gate=None):
+def offers_for(prices, fair=0.40, held=frozenset(), bar=PREMIUM_BAR, up=True, gate=None):
     frame = pd.DataFrame([priced(fair=fair, up=up, gate=gate)])
     venue_fee = VARIANTS["fee"]["polymarket"](dict(FEE))
     return make_offers(frame, asks(MON, **prices), venue_fee, bar, {}, set(held))[0]

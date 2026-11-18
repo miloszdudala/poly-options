@@ -29,10 +29,10 @@ def totals(name, overrides=None):
 
 
 @pytest.mark.parametrize("name,expected", [
-    ("mvp", (8, 1124.07, -46.57, 8)),          # barrier-strike vol (2026-11-14)
+    ("mvp", (8, 2.76, -0.76, 8)),              # one share, no YES premium (2026-11-18)
     ("control", (8, 572.50, -150.99, 8)),
-    ("hit_monthly", (3, 216.01, -32.45, 1)),
-    ("close_above_weekly", (6, 627.33, 362.17, 6)),
+    ("hit_monthly", (3, 1.05, -0.22, 1)),
+    ("close_above_weekly", (6, 2.14, 0.86, 6)),
 ])
 def test_the_replays_match_the_code_before_the_restructure(synthetic_store, name, expected):
     assert totals(name) == expected

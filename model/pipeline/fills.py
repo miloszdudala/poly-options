@@ -33,6 +33,6 @@ def walk_ladder(ladder: pd.DataFrame, limit: float, budget_usd: float, fee,
         left -= spend
         if left <= 1e-9:
             break
-    if sum(t["cost_usd"] for t in taken) < min_fill_usd:
+    if sum(t["cost_usd"] for t in taken) < min_fill_usd - 1e-9:   # $1 can sum to 0.9999...
         return []
     return taken

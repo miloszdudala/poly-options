@@ -7,7 +7,8 @@ bet's `max_usd` and the account's cash.
 
 | variant | does | decided / open |
 |---|---|---|
-| `edge_taker` | takes every offer, as large as the book allows | the MVP model |
+| `edge_taker` | takes every offer, as large as the book allows | the MVP model until 2026-11-18 |
+| `fixed_shares` | takes every offer, `shares` (1) of each | the MVP model from 2026-11-18 |
 | `random_control` | `orders_per_cycle` (12) bets drawn from every priced bet, at most `slip` (2c) over the best ask | the control; use it with `bar: any_price` |
 
 Directions and vol, for a hit market: YES on hit_up and NO on hit_down lean
@@ -79,6 +80,19 @@ class Model:
 class EdgeTaker(Model):
     def decide(self, offers, book):
         return [Order(bet, usd=bet.max_usd) for bet in offers]
+
+
+@variant("sizing", "fixed_shares")
+class FixedShares(Model):
+    """The same number of shares of every offer, so every bet pays the same
+    if it wins and no single bet decides a week. Sized at the best ask; if
+    that level is too thin the walk goes deeper and buys a little less."""
+
+    def __init__(self, shares: float = 1.0):
+        super().__init__(shares=shares)
+
+    def decide(self, offers, book):
+        return [Order(bet, usd=self.params["shares"] * bet.cost) for bet in offers]
 
 
 @variant("sizing", "random_control")

@@ -32,16 +32,17 @@ gates:                                      # 5. which priced markets may be tra
 fee:                                        # 6. decided: the market's own schedule at the time;
   use: polymarket                           #    rate x (p(1-p))^exponent, 0.04 if never recorded
   rate: 0.04
-bar:                                        # 7. approved: yes_premium (2026-10-09), EV >= 3c at every price (2026-11-16)
+bar:                                        # 7. approved: EV >= 3c at every price (2026-11-16); YES premium dropped (2026-11-18)
   min_ev: 0.03
   min_roi: 0.08
   dear_price: 0.90
   dear_min_ev: 0.03
   dear_min_roi: 0.02
-  yes_premium: 0.02
-sizing:                                     # 8. the model
-  use: edge_taker
-fills:                                      # 9. take at most half a level; $1 minimum
+  yes_premium: 0.0
+sizing:                                     # 8. decided 2026-11-18: one share of every bet
+  use: fixed_shares
+  shares: 1
+fills:                                      # 9. take at most half a level; $1 minimum to be offered
   take_fraction: 0.5
   min_fill_usd: 1.0
 account:                                    # 10. decided: max bets, no ceiling

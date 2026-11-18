@@ -174,6 +174,10 @@ def _fill(order: Order, behind: dict, open_positions: dict, held: set, account, 
     ladder, row = behind[key]
     usd = min(order.usd, bet.max_usd, account.cash())
     limit = bet.limit if order.limit is None else min(bet.limit, order.limit)
+    # An order the model sizes below the venue minimum (fixed_shares: one
+    # share is under $1) fills on paper if the book fills all of it. Whether
+    # a bet is offered at all still needs the minimum (`make_offers`).
+    fills_cfg = {**fills_cfg, "min_fill_usd": min(fills_cfg.get("min_fill_usd", 1.0), usd)}
     taken = (walk_ladder(ladder, limit, usd, lambda p: fee(p, bet.market_id, now), **fills_cfg)
              if usd > 0 else [])
     if not taken:

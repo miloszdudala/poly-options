@@ -376,7 +376,7 @@ def test_fair_values_do_not_jump_between_cycles_without_a_reason(fair):
 def test_the_cache_matches_a_fresh_reprice(fair, dates):
     """Reprice the newest cycle without the cache and compare: the cache key
     covers settings and code, so a difference means it missed something."""
-    newest = sorted(set(fair.loc[fair["date"] == dates[-1], "cycle_id"]))[-1]
+    newest = fair["cycle_id"].max()          # the newest priced cycle (today may have none yet)
     frame = lab.inspect(configs.load("mvp"), newest)
     stored = fair[fair["cycle_id"] == newest][["market_id", "fair", "gate"]]
     merged = stored.merge(frame[["market_id", "fair", "gate"]], on="market_id",
