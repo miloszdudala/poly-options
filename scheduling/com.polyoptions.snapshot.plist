@@ -5,13 +5,13 @@
     <key>Label</key>
     <string>com.polyoptions.snapshot</string>
 
-    <!-- Fires on the quarter hour, around the clock; the job itself decides
+    <!-- Fires every 5 minutes on the clock, around the clock; the job itself decides
          whether to collect (NYSE session only) and exits in ~2 s otherwise.
 
          Deliberately NOT StartInterval. launchd does not start counting an
          interval until the job exits, so a 150 s run pushed every tick 150 s
          later: measured gaps of 17.0-18.0 min against a nominal 15, which cost
-         5 of 26 snapshots per session and left cycles at drifting clock times
+         5 of 26 snapshots per session (at 15 min) and left cycles at drifting clock times
          that cannot be lined up across days. Calendar entries are absolute, so
          a slow run delays only itself. launchd will not start a second copy
          while one is still running, it defers to the next slot. -->
@@ -25,9 +25,17 @@
     <key>StartCalendarInterval</key>
     <array>
         <dict><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Minute</key><integer>5</integer></dict>
+        <dict><key>Minute</key><integer>10</integer></dict>
         <dict><key>Minute</key><integer>15</integer></dict>
+        <dict><key>Minute</key><integer>20</integer></dict>
+        <dict><key>Minute</key><integer>25</integer></dict>
         <dict><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Minute</key><integer>35</integer></dict>
+        <dict><key>Minute</key><integer>40</integer></dict>
         <dict><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Minute</key><integer>50</integer></dict>
+        <dict><key>Minute</key><integer>55</integer></dict>
     </array>
 
     <key>WorkingDirectory</key>

@@ -62,7 +62,7 @@ BETS = "proof/BETS.md"
 SETTLEMENTS = "proof/SETTLEMENTS.md"
 PERFORMANCE = "proof/PERFORMANCE.md"
 LAST_CYCLE = HERE / "store" / "record_last_cycle"      # not in git
-MAX_BOOK_AGE = pd.Timedelta(minutes=15)                # by then the next cycle has begun
+MAX_BOOK_AGE = pd.Timedelta(minutes=15)                # older cycles are skipped, not recorded late
 MARKET_ID_COLUMN = 3
 SETTLED_ID_COLUMN = 2
 GAMMA_BATCH = 100
@@ -210,23 +210,34 @@ def questions_for(ids: list[str]) -> dict[str, str]:
     return dict(zip(frame["market_id"].astype(str), frame["question"]))
 
 
-def newest_new_cycle(now: pd.Timestamp) -> str | None:
-    """The newest finished session cycle, if it is fresh and not yet looked at."""
+def next_new_cycle(now: pd.Timestamp) -> str | None:
+    """The oldest finished session cycle that is fresh and not yet looked at.
+
+    Oldest first, so that when two cycles finish between runs (5-minute ticks
+    after a long hourly one) neither is skipped and bets are recorded in the
+    order the replay would place them."""
     date = now.strftime("%Y-%m-%d")
     finished = set(store.runs(date, jobs=("snapshot",))["cycle_id"])
-    cycles = [c for c in store.session_cycles(date) if c in finished]
-    if not cycles or pd.Timestamp(store.cycle_start(cycles[-1])) < now - MAX_BOOK_AGE:
-        return None
     done = LAST_CYCLE.read_text().strip() if LAST_CYCLE.exists() else ""
-    return None if cycles[-1] == done else cycles[-1]
+    fresh = [c for c in store.session_cycles(date) if c in finished and c > done
+             and pd.Timestamp(store.cycle_start(c)) >= now - MAX_BOOK_AGE]
+    return fresh[0] if fresh else None
 
 
 def record() -> int:
-    cycle_id = newest_new_cycle(pd.Timestamp.now(tz="UTC"))
-    if cycle_id is None:
-        push(REPO)
-        return 0
+    """Every new cycle, oldest first: with 5-minute ticks two can finish
+    between runs, and skipping one would leave its bets out of the record."""
+    unpatched = store.bars_5m
+    while (cycle_id := next_new_cycle(pd.Timestamp.now(tz="UTC"))) is not None:
+        store.bars_5m = unpatched
+        if not record_cycle(cycle_id):
+            break
+    push(REPO)
+    return 0
 
+
+def record_cycle(cycle_id: str) -> bool:
+    """Price one cycle and append its bets; False if it must wait for the next run."""
     config = configs.load(CONFIG)
     excluded = set(config["markets"].get("exclude_tickers") or [])
     symbols = {u.symbol: u.yf_symbol for u in underlyings() if u.symbol not in excluded}
@@ -240,7 +251,7 @@ def record() -> int:
         bets, _ = decide(cycle_id, config, market_ids(read_main(REPO)))
     except NotReady as exc:         # SPY's bars are behind: the next run tries again
         print(f"  {exc}", file=sys.stderr)
-        return 0
+        return False
 
     if bets:
         written_at = pd.Timestamp.now(tz="UTC")
@@ -249,12 +260,11 @@ def record() -> int:
         rows = "".join(table_row(p, written_at, code, questions.get(p.market_id, ""))
                        for p in bets)
         append_to_main(REPO, rows, f"{len(bets)} bet(s) from cycle {cycle_id}")
-    push(REPO)
     LAST_CYCLE.parent.mkdir(parents=True, exist_ok=True)
     LAST_CYCLE.write_text(cycle_id)
     left_out = f", left out {' '.join(stale)}" if stale else ""
     print(f"{cycle_id}: {len(bets)} bet(s){left_out}")
-    return 0
+    return True
 
 
 # ---------------------------------------------------------------- settlements
