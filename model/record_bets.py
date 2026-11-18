@@ -11,7 +11,7 @@ Settlements: every bet in BETS.md without a settlement is looked up on
 Polymarket's public API, and its resolution, not our own reading of the stock's
 price, is what gets written. This needs nothing but the two files and the API.
 
-A book that is replaced (the model changed) moves to proof/archive/ and
+A book that is replaced (the model changed) moves to archive/ and
 is listed in ARCHIVED: it takes no new bets, but its open bets are still
 settled and its weeks still added to its own PERFORMANCE.md.
 
@@ -67,7 +67,7 @@ SETTLEMENTS = "proof/SETTLEMENTS.md"
 PERFORMANCE = "proof/PERFORMANCE.md"
 # Earlier books: no new bets, but their open bets are still settled and their
 # weeks still added to their own PERFORMANCE.md.
-ARCHIVED = ["proof/archive/2026-11-06_max_size"]
+ARCHIVED = ["archive/2026-11-06_max_size"]
 BOOKS = [(BETS, SETTLEMENTS, PERFORMANCE)] + [
     (f"{d}/BETS.md", f"{d}/SETTLEMENTS.md", f"{d}/PERFORMANCE.md") for d in ARCHIVED]
 LAST_CYCLE = HERE / "store" / "record_last_cycle"      # not in git
