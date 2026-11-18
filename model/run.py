@@ -1,7 +1,6 @@
 """The one command for `model/`.
 
     run.py [--store PATH] [replay] [--config mvp] [--set step.key=value] [--from D] [--to D] [--save]
-    run.py daily                 # replay the routine configs on every date, write the daily report
     run.py lab inspect|score|sweep ...
     run.py sample --from D --to D --tickers T,... --out DIR  |  --synthetic --out DIR
     run.py dashboard
@@ -119,9 +118,6 @@ def main(argv=None) -> int:
     if command == "sample":
         import sample
         return sample.main(rest)
-    if command == "daily":
-        import daily
-        return daily.main(rest)
     if command == "dashboard":
         from reporting import dashboard
         return dashboard.main(rest)

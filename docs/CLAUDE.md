@@ -126,10 +126,10 @@ every choice and whether it is decided, open or a guess.
 - `model/` - `store.py` (the one door to the Parquet store, or to a sample of
   it), `pipeline/` (the decision steps), `configs/`, `replay.py` (runs a
   config over dates), `lab.py` (score or sweep one step on a sample),
-  `sample.py` / `synthetic.py` (small stores), `reporting/`, `daily.py`.
+  `sample.py` / `synthetic.py` (small stores), `reporting/`.
   `model/run.py` is the one command; it writes `model/store/` (ledgers and
   the pricing cache, not in git) and `model/reports/`.
-- `scheduling/` - launchd jobs for the collector and the daily report.
+- `scheduling/` - launchd jobs for the collector and the proof recorder.
 
 ## Commands
 

@@ -4,7 +4,7 @@
     .venv/bin/python model/run.py dashboard --no-open
 
 Rebuilt every time it is opened this way, from whatever `bets` ledgers
-`run.py --save` or `run.py daily` last wrote. Everything the page
+`run.py --save` last wrote. Everything the page
 needs is inside the file: the bets as JSON and a small script that filters
 and totals them, so it opens with no network.
 

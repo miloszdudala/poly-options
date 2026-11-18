@@ -9,7 +9,6 @@ Replay and reporting commands (`model/`):
 ```bash
 .venv/bin/python model/run.py --help                   # replay configs (default: mvp, control)
 .venv/bin/python model/run.py --dates 2026-09-16,... --save --tag name
-.venv/bin/python model/run.py daily                    # replay, write the daily report
 .venv/bin/python model/run.py sample --synthetic --out model/samples/synthetic
 .venv/bin/python model/run.py --store model/samples/synthetic lab sweep --vary bar.min_ev=0.03,0.1
 .venv/bin/python model/run.py dashboard                # rebuild and open the dashboard

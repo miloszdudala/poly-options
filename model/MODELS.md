@@ -37,7 +37,7 @@ is being developed; the extensions are kept, not trusted.
 **Accounts** (step 10): `max` (routine), `compound` (`start`, default $100,
 reinvests), `budget` (`per_period` per day, week or month; no roll-over).
 **Run:** `model/run.py` (default: replay `mvp` and `control` over every date;
-`--save` writes ledgers and reports), `run.py daily`, `run.py lab`,
+`--save` writes ledgers and reports), `run.py lab`,
 `run.py dashboard`.
 
 ## Models

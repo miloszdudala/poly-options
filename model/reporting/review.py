@@ -8,7 +8,7 @@ Weeks and months are those of the position's first fill, in New York time
 (a week starts on Monday). Each ledger is one model on one type, shown as
 `model / type` (with the account when it is not `max`).
 
-Reads the ledgers the last `run.py --save` / `run.py daily` wrote and the newest book
+Reads the ledgers the last `run.py --save` wrote and the newest book
 snapshot in the store. Nothing is replayed, so the ledgers are only as fresh
 as the last run: the header says how far they reach.
 
