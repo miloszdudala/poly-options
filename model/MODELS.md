@@ -68,6 +68,11 @@ will be written as sizing variants in `pipeline/sizing.py`. Their predecessors, 
 - `maker` (resting bids): in a book this thin a resting bid is mostly filled
   by someone who has just seen the stock move against it; doing it honestly
   needs the trade tape, a cancel rule and a queue model.
+  The user's idea (2026-11-18): where the gap between the YES and NO asks is
+  wide, rest bids on *both* sides inside it, so that a YES and a NO together
+  cost under $1 and one of them must pay $1. The risk is legging: when the
+  stock moves, a trader takes only the side that has become cheap, and we
+  hold one leg at a stale price. Testing it needs the same trade tape.
 - Selling before resolution: every bet is held to resolution (`CLAUDE.md`).
 - Kalshi year-end index ladders: no type yet.
 
