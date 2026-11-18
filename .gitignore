@@ -10,3 +10,7 @@ model/samples/
 
 # local secrets (data API keys)
 .env
+
+# agent instructions: kept locally, not published
+CLAUDE.md
+docs/CLAUDE.md
