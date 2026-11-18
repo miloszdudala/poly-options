@@ -11,6 +11,10 @@ Settlements: every bet in BETS.md without a settlement is looked up on
 Polymarket's public API, and its resolution, not our own reading of the stock's
 price, is what gets written. This needs nothing but the two files and the API.
 
+A book that is replaced (the model changed) moves to proof/archive/ and
+is listed in ARCHIVED: it takes no new bets, but its open bets are still
+settled and its weeks still added to its own PERFORMANCE.md.
+
 proof/ outlives everything else in this repo. Its files depend on nothing else.
 Replace this script freely when the code is rebuilt, as long as rows are only
 ever added to them.
@@ -61,6 +65,11 @@ CONFIG = "mvp"
 BETS = "proof/BETS.md"
 SETTLEMENTS = "proof/SETTLEMENTS.md"
 PERFORMANCE = "proof/PERFORMANCE.md"
+# Earlier books: no new bets, but their open bets are still settled and their
+# weeks still added to their own PERFORMANCE.md.
+ARCHIVED = ["proof/archive/2026-11-06_max_size"]
+BOOKS = [(BETS, SETTLEMENTS, PERFORMANCE)] + [
+    (f"{d}/BETS.md", f"{d}/SETTLEMENTS.md", f"{d}/PERFORMANCE.md") for d in ARCHIVED]
 LAST_CYCLE = HERE / "store" / "record_last_cycle"      # not in git
 MAX_BOOK_AGE = pd.Timedelta(minutes=15)                # older cycles are skipped, not recorded late
 MARKET_ID_COLUMN = 3
@@ -308,7 +317,16 @@ def settlement_row(bet: list[str], market: dict, written_at) -> str | None:
 
 
 def record_settlements() -> int:
-    waiting = unsettled(read_main(REPO), read_main(REPO, SETTLEMENTS))
+    for bets, settlements, performance_path in BOOKS:
+        if on_main(REPO, bets):
+            settle_book(bets, settlements)
+            record_performance(bets, settlements, performance_path)
+    push(REPO)
+    return 0
+
+
+def settle_book(bets: str, settlements: str) -> None:
+    waiting = unsettled(read_main(REPO, bets), read_main(REPO, settlements))
     if waiting:
         closed = closed_markets([row[MARKET_ID_COLUMN] for row in waiting])
         written_at = pd.Timestamp.now(tz="UTC")
@@ -316,27 +334,25 @@ def record_settlements() -> int:
                 for row in waiting if row[MARKET_ID_COLUMN] in closed]
         rows = [row for row in rows if row]
         if rows:
-            append_to_main(REPO, "".join(rows), f"{len(rows)} settlement(s)", SETTLEMENTS)
-            print(f"{len(rows)} settlement(s)")
-    record_performance()
-    push(REPO)
-    return 0
+            append_to_main(REPO, "".join(rows), f"{len(rows)} settlement(s)", settlements)
+            print(f"{len(rows)} settlement(s) in {settlements}")
 
 
-def record_performance() -> None:
-    """Bring PERFORMANCE.md on `main` up to date with BETS.md and SETTLEMENTS.md.
-    The table only ever grows; one that would change an existing row is not
-    written."""
-    new = performance.table(read_main(REPO), read_main(REPO, SETTLEMENTS),
+def record_performance(bets: str = BETS, settlements: str = SETTLEMENTS,
+                       path: str = PERFORMANCE) -> None:
+    """Bring a book's PERFORMANCE.md on `main` up to date with its BETS.md and
+    SETTLEMENTS.md. The table only ever grows; one that would change an
+    existing row is not written."""
+    new = performance.table(read_main(REPO, bets), read_main(REPO, settlements),
                             pd.Timestamp.now(tz="UTC").to_pydatetime())
-    old = read_main(REPO, PERFORMANCE) if on_main(REPO, PERFORMANCE) else ""
+    old = read_main(REPO, path) if on_main(REPO, path) else ""
     if new == old:
         return
     if not new.startswith(old):
-        print("  PERFORMANCE.md would change an existing row; left alone", file=sys.stderr)
+        print(f"  {path} would change an existing row; left alone", file=sys.stderr)
         return
     weeks = len(performance.rows(new)) - len(performance.rows(old))
-    append_to_main(REPO, new[len(old):], f"{weeks} week(s) of performance", PERFORMANCE)
+    append_to_main(REPO, new[len(old):], f"{weeks} week(s) of performance", path)
     print(f"{weeks} week(s) of performance")
 
 
