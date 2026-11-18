@@ -57,7 +57,7 @@ PY
 echo "repo:        $REPO"
 echo "daily job:   17:30 America/New_York  ->  ${DAILY_HOUR}:$(printf '%02d' "$DAILY_MINUTE") local"
 echo "report job:  18:00 America/New_York  ->  ${REPORT_HOUR}:$(printf '%02d' "$REPORT_MINUTE") local"
-echo "snapshot:    every 15 min (job itself skips off-hour ticks and holidays)"
+echo "snapshot:    every 5 min (job itself skips off-hour ticks and holidays)"
 
 mkdir -p "$AGENTS" "$REPO/data/logs"
 
