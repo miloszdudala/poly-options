@@ -89,9 +89,9 @@ def run(config="mvp", overrides=None):
 
 
 def test_the_mvp_config_holds_todays_bar_unchanged():
-    """EV >= 3c and return >= 8%; above 90c, return >= 2%; YES pays 2c first."""
+    """EV >= 3c at every price; return >= 8%, above 90c >= 2%; YES pays 2c first."""
     bar = configs.load("mvp")["bar"]
-    assert bar == {"min_ev": 0.03, "min_roi": 0.08, "dear_price": 0.90, "dear_min_ev": 0.0,
+    assert bar == {"min_ev": 0.03, "min_roi": 0.08, "dear_price": 0.90, "dear_min_ev": 0.03,
                    "dear_min_roi": 0.02, "yes_premium": 0.02}
     assert Bar(**bar) == TODAYS_BAR
 
@@ -125,8 +125,10 @@ def test_a_yes_is_charged_the_premium_and_a_no_is_not():
     assert TODAYS_BAR.value(0.60, "NO") == pytest.approx(0.60)
 
 
-def test_above_ninety_cents_the_bar_is_roi_not_three_cents():
-    assert TODAYS_BAR.clears(0.953, 0.93 + 0.04 * 0.07, 0.93)
+def test_above_ninety_cents_the_bar_is_three_cents_and_two_percent():
+    # approved 2026-11-16: EV >= 3c also above 90c
+    assert TODAYS_BAR.clears(0.966, 0.93 + 0.04 * 0.07, 0.93)
+    assert not TODAYS_BAR.clears(0.953, 0.93 + 0.04 * 0.07, 0.93)
     assert not TODAYS_BAR.clears(0.923, 0.90 + 0.04 * 0.10, 0.90)
 
 

@@ -14,8 +14,9 @@ Each docstring says what a failure means. The thresholds are at the top and
 are deliberately loose: a failure here should be a defect, not noise.
 
 The tests skip, not fail, when the store is empty. They do not re-run the
-models: the ledger under `model/store/ledger` is whatever `run_all.py` or
-`daily.py` last wrote, and that is what they check.
+models: the ledger under `model/store/ledger` is whatever the last
+`run.py --save` wrote, and that is what they check. A ledger written by older
+code can fail them; replay it again (or delete it) rather than loosen a test.
 """
 from __future__ import annotations
 
@@ -26,15 +27,15 @@ import pytest
 import lab
 import store
 from pipeline import config as configs
-from reporting import ledger_schema, results
+from pipeline.offers import Bar
+from reporting import ledger_schema
 
 # --------------------------------------------------------------- thresholds
 
-MIN_CYCLES_PER_FULL_DATE = 16     # 15-minute cadence over 6.5 h is ~26; 09-16 had 21
+MIN_CYCLES_PER_FULL_DATE = 16     # 15-minute cadence over 6.5 h is ~26 (5-minute from 11-18: ~78); 09-16 had 21
 QUOTE_AGE_RANGE_S = (120, 1800)   # Cboe's 15-minute delay, with room either side
 MIN_BAR_SPOT_SHARE = 0.95         # equity market-cycles whose spot came from a 5m bar
 MAX_SPOT_VS_CBOE = 0.02           # bar spot against Cboe's delayed last price
-OPEN_SETTLED_Z = "140000"         # 30 min after the (DST) open; see the spot test
 MAX_FAIR_JUMP = 0.25              # between consecutive cycles, spot and T unchanged
 MAX_FAIR_JUMP_SHARE = 0.01        # share of consecutive pairs allowed past it
 MAX_REPRICE_DIFF = 1e-3           # store vs a fresh reprice of the same cycle
@@ -52,6 +53,9 @@ KNOWN_THIN_DATES = {
     # ("deadline hit after kalshi/polymarket books: options skipped", runs
     # table): 1 cycle could be priced.
     "2026-10-12",
+    # Collector outage: 15,819 failed requests, 6 runs not ok, gaps up to
+    # 34 min (collector table, 2026-11-18): 13 priced cycles.
+    "2026-11-12",
 }
 
 YES, NO = 0, 1
@@ -105,7 +109,7 @@ def _ledger(table: str) -> pd.DataFrame:
 def fills():
     frame = _ledger("fills")
     if frame.empty:
-        pytest.skip("no ledger: run model/run.py --save or model/run.py daily first")
+        pytest.skip("no ledger: run model/run.py --save first")
     # These checks read Polymarket's hit books and pricing, which only the hit
     # configs use. The chain and Kalshi extensions have their own tests.
     return frame[frame["contract_type"].isin(["hit_up", "hit_down"])].reset_index(drop=True)
@@ -140,6 +144,11 @@ def asks(fills):
     return frame
 
 
+def _minutes_after_open(cycle_id: str) -> float:
+    local = pd.Timestamp(store.cycle_start(cycle_id)).tz_convert("America/New_York")
+    return (local - local.normalize() - pd.Timedelta(hours=9, minutes=30)).total_seconds() / 60
+
+
 def _fair_at(fair: pd.DataFrame) -> pd.DataFrame:
     return fair.set_index(["cycle_id", "market_id"]).sort_index()
 
@@ -149,16 +158,25 @@ def _fair_at(fair: pd.DataFrame) -> pd.DataFrame:
 
 def test_every_in_session_cycle_with_books_is_priced(dates, fair):
     """A cycle with books and no fair values is a cycle no model could trade.
-    Failure: `daily.py` step 1 did not run, or `price_missing` failed on it."""
+    Failure: pricing failed on it.
+
+    Cycles inside the opening window (`gates.opening_minutes`, no bets) are
+    left out: on Mondays the first one or two have no current-week markets,
+    because the walk that finds the new week's ladders runs after that run's
+    books (seen on every Monday from 09-28 to 11-16)."""
     book_dates = store._q(f"select distinct date from {store._src('poly_books')} order by 1")
-    # Today's books are priced by the evening `daily.py`; until it runs they
-    # are not a failure (2026-10-19 failed all day for that reason).
+    # Today's cycles may still lack the 5-minute bars they need.
+    opening = configs.load("mvp")["gates"].get("opening_minutes", 0)
+    # The collector started at 10:30 ET on 09-28: its first cycle was the
+    # Monday first run described above, outside the opening window.
+    known = {"20260928T143006Z-43b297"}
     today = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d")
     missing = {}
     for date in book_dates["date"].astype(str):
         if date in store.EXCLUDED_DATES or date >= today:
             continue
-        cycles = store.session_cycles(date)
+        cycles = [c for c in store.session_cycles(date)
+                  if _minutes_after_open(c) >= opening and c not in known]
         if not cycles:
             continue
         priced = set(fair.loc[fair["date"] == date, "cycle_id"])
@@ -233,15 +251,15 @@ def test_bar_spot_agrees_with_cboe_s_delayed_price(fair, dates):
     bars = store.bars_5m()
     for date in dates:
         cycles = sorted(c for c in set(fair.loc[fair["date"] == date, "cycle_id"])
-                        if c[9:15] >= OPEN_SETTLED_Z)
+                        if _minutes_after_open(c) >= 30)
         for cycle_id in cycles[:: max(1, len(cycles) // 3)]:      # a few per date
             cboe = store.cboe_spot(cycle_id).set_index("symbol")["last_price"]
             rows = fair[(fair["cycle_id"] == cycle_id) & (fair["spot_source"] == "bar_5m")
-                        & fair["quote_time_utc"].notna()]
+                        & fair["quote_time"].notna()]
             rows = rows.drop_duplicates("ticker")
             if rows.empty:
                 continue
-            at = pd.to_datetime(rows["quote_time_utc"], utc=True, format="ISO8601")
+            at = pd.to_datetime(rows["quote_time"], utc=True)
             for ticker, when in zip(rows["ticker"], at):
                 ref = cboe.get(ticker)
                 bar = bars[(bars["symbol"] == ticker) & (bars["bar_time"] <= when)].tail(1)
@@ -464,15 +482,18 @@ def _fair_row(keyed, cycle_id, market_id):
 
 
 def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
-    """edge_taker: the recorded win probability is the engine's fair for the
-    side bought, the market was neither deep OTM nor chainless, and the price
-    paid cleared today's EV and ROI floors against it."""
+    """mvp: the recorded win probability is the engine's fair for the side
+    bought, the market was neither deep OTM nor chainless, and every share
+    cost no more than the mvp bar's limit, judged on the best ask's floors as
+    the walk is (`offers.Bar.limit`), YES premium included."""
     keyed = _fair_at(fair)
-    option = fills[fills["model"].str.startswith("edge_taker")]
+    option = fills[fills["model"] == "mvp"]
     if option.empty:
-        pytest.skip("no option-signal fills yet")
+        pytest.skip("no mvp fills yet")
+    bar = Bar(**{k: v for k, v in configs.load("mvp")["bar"].items() if k != "use"})
+    best_ask = option.groupby(["market_id", "outcome_index", "cycle_id"])["price"].transform("min")
     bad = []
-    for f in option.itertuples():
+    for f, ask in zip(option.itertuples(), best_ask):
         row = _fair_row(keyed, f.cycle_id, f.market_id)
         if row is None:
             bad.append((f.model, f.market_id, "no fair row")); continue
@@ -483,16 +504,7 @@ def test_option_models_only_took_edges_that_cleared_the_bar(fills, fair):
         if bool(row["deep_otm"]) or bool(row["no_chain"]):
             bad.append((f.model, f.market_id, "deep_otm or no_chain")); continue
         cost = f.price + f.fee_usd / f.shares
-        dear = f.price > 0.90
-        ev_bar, roi_bar = (0.0, 0.02) if dear else (0.03, 0.08)
-        if win - cost < ev_bar - 1e-9 or (win - cost) / cost < roi_bar - 1e-9:
-            bad.append((f.model, f.market_id, f"win {win:.3f} cost {cost:.3f}"))
-    assert not bad, f"{len(bad)} option-signal fills that did not clear the bar: {bad[:5]}"
-
-
-def test_the_daily_report_exists_for_the_newest_priced_date_and_warns(dates):
-    path = results.REPORTS / f"daily_{dates[-1]}.md"
-    assert path.exists(), f"no daily report for {dates[-1]}: run model/run.py daily"
-    text = path.read_text()
-    assert len(text.splitlines()) <= 120
-    assert "not" in text.lower() and "result" in text.lower(), "the selection warning is missing"
+        limit = bar.limit(bar.value(win, "YES" if f.outcome_index == YES else "NO"), ask)
+        if cost > limit + 1e-9:
+            bad.append((f.model, f.market_id, f"win {win:.3f} cost {cost:.3f} limit {limit:.3f}"))
+    assert not bad, f"{len(bad)} mvp fills that did not clear the bar: {bad[:5]}"

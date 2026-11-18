@@ -55,7 +55,7 @@ class Bar:
     min_ev: float = 0.03
     min_roi: float = 0.08
     dear_price: float = 0.90
-    dear_min_ev: float = 0.0
+    dear_min_ev: float = 0.03
     dear_min_roi: float = 0.02
     yes_premium: float = 0.02
 

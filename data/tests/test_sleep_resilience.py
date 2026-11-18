@@ -87,10 +87,11 @@ def test_kalshi_does_not_run_twice_inside_its_interval():
 
 
 def test_kalshi_tolerates_a_tick_arriving_just_early():
-    """A tick at 53 minutes must collect, not defer an hour to the next one."""
+    """With 5-minute ticks, a tick at 58 minutes must collect, not defer to
+    the one at 63; one at 53 waits for the next."""
     when = _at(11, 18)
-    ran, _ = should_run_kalshi(when, when - dt.timedelta(minutes=53))
-    assert ran is True
+    assert should_run_kalshi(when, when - dt.timedelta(minutes=58))[0] is True
+    assert should_run_kalshi(when, when - dt.timedelta(minutes=53))[0] is False
 
 
 def test_kalshi_runs_when_it_has_never_run():
@@ -108,7 +109,8 @@ def test_kalshi_every_tick_when_the_interval_is_the_tick(monkeypatch):
     import config
 
     cfg = config.markets_cfg()
-    patched = {**cfg, "kalshi": {**cfg["kalshi"], "interval_minutes": 15}}
+    tick = cfg["schedule"]["intraday_interval_minutes"]
+    patched = {**cfg, "kalshi": {**cfg["kalshi"], "interval_minutes": tick}}
     monkeypatch.setattr(util, "markets_cfg", lambda: patched)
     assert should_run_kalshi(_at(11, 18), _at(11, 17))[0] is True
 
