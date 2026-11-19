@@ -225,10 +225,11 @@ def test_option_quotes_are_the_expected_age_in_every_cycle(fair, fills):
 
 def test_spot_comes_from_a_bar_for_nearly_every_equity_market(fair):
     """A `cboe_delayed` spot is 15 minutes stale. A rising share of them means
-    the 5-minute bars stopped arriving (the daily job) or a symbol changed."""
+    the 5-minute bars stopped arriving (the daily job), Tiingo's live quotes
+    did (the spot since 2026-11-17, `inputs.hit`), or a symbol changed."""
     equities = fair[~fair["ticker"].isin(EQUITY_EXCLUDED)]
-    share = (equities["spot_source"] == "bar_5m").mean()
-    assert share >= MIN_BAR_SPOT_SHARE, f"only {share:.1%} of equity market-cycles have a bar spot"
+    share = equities["spot_source"].isin(["bar_5m", "tiingo"]).mean()
+    assert share >= MIN_BAR_SPOT_SHARE, f"only {share:.1%} of equity market-cycles have a fresh spot"
 
 
 def test_bar_spot_agrees_with_cboe_s_delayed_price(fair, dates):
@@ -431,9 +432,17 @@ def test_fees_and_costs_are_on_the_price_paid(fills):
     # The venue minimum is per order, and one order is a walk over several
     # levels: three $0.50 levels are a valid $1.50 order. Sum the walk; the
     # per-level check this replaced failed on exactly that (2026-09-21 14:06Z).
-    walk = fills.groupby(["model", "market_id", "outcome_index", "cycle_id"])["cost_usd"].sum()
-    assert (walk >= 1.0 - 1e-9).all(), \
-        f"walks below the $1 venue minimum: {walk[walk < 1.0 - 1e-9].head().to_dict()}"
+    # Exception (2026-11-18, one share of every bet): an order sized below the
+    # minimum fills on paper (`replay.fill`), so a walk under $1 is fine if it
+    # bought at most the configured shares (a thin best ask makes the walk go
+    # deeper and buy a little less: `sizing.FixedShares`).
+    walks = fills.groupby(["model", "market_id", "outcome_index", "cycle_id"])
+    walk, shares = walks["cost_usd"].sum(), walks["shares"].sum()
+    fixed = configs.load("mvp")["sizing"].get("shares")
+    small = walk < 1.0 - 1e-9
+    one_order = (shares <= fixed + 1e-9) if fixed else False
+    bad = walk[small & ~one_order]
+    assert bad.empty, f"walks below the $1 venue minimum: {bad.head().to_dict()}"
 
 
 def test_no_fill_on_a_market_whose_barrier_had_already_printed(fills):
