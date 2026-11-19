@@ -126,26 +126,12 @@ completes.
 Idle sleep is already off (`pmset -g custom` shows `sleep 0` on both AC and
 battery), so in practice: **leave the lid open and keep it plugged in.** Closing
 the lid sleeps the Mac regardless of that setting, unless it is in clamshell mode
-on an external display. Wi-Fi has to stay up. Check that nothing was missed with
-`data/inspect.py`, or by counting cycles in `runs` for the date.
+on an external display. Wi-Fi has to stay up. Check that nothing was missed by
+counting cycles in `runs` for the date.
 
 Session boundaries come from the `pandas_market_calendars` NYSE calendar, so
 half-days and US market holidays are handled, and the tz database supplies the
 offset rather than a hard-coded one.
-
-## Inspect
-
-```bash
-.venv/bin/python data/inspect.py            # latest cycle
-.venv/bin/python data/inspect.py --cycle X  # a specific cycle
-```
-
-Prints per-table row counts for the latest cycle, the run summary, one example
-order book, and any failures.
-
-`inspect.py` sits outside `data/src/` on purpose: a module named `inspect.py`
-shadows the standard-library module for every sibling that imports it (numpy and
-duckdb both do), which would break the collectors if it lived next to them.
 
 ## How large a bet fits
 
@@ -219,8 +205,8 @@ option probability compared against a live book without the correction
 mostly measures 15 minutes of drift is a takeaway *(unapproved)*.
 
 Rows written before commit dadb128 had `source_quote_time_utc` four hours
-late (the file clock parsed as Eastern); `data/migrations/2026-09-18_*.py`
-repaired them in place.
+late (the file clock parsed as Eastern); a one-off migration (2026-09-18,
+in git history) repaired them in place.
 
 ### Markets are born at 12:40 ET and die when they touch
 

@@ -73,4 +73,3 @@ done
 echo
 echo "installed. check with:  launchctl list | grep polyoptions"
 echo "logs:                   $REPO/data/logs/"
-echo "inspect data:           $REPO/.venv/bin/python $REPO/data/inspect.py"
