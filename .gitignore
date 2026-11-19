@@ -14,3 +14,10 @@ model/samples/
 # agent instructions: kept locally, not published
 CLAUDE.md
 docs/CLAUDE.md
+
+# Markdown stays local (Claude-written notes, generated reports), except the
+# proof, its archive and folder READMEs.
+*.md
+!README.md
+!proof/**/*.md
+!archive/**/*.md
