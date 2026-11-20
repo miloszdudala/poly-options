@@ -281,6 +281,37 @@ def test_legs_are_all_full_sessions_when_the_cycle_is_outside_one():
     assert fair._legs(0.0) == []
 
 
+def test_segment_sigma_makes_the_legs_add_up_to_the_quote():
+    """The simulated gaps and sessions from the quote to the expiry carry
+    exactly the quote's total variance, whatever f and wherever the quote
+    falls in its session."""
+    vol_cal, years_cal = 0.40, 4.2 / 365.0
+    for quote_sessions in (4.81, 0.5, 3.0, 0.07):
+        for f in (0.3, 0.6, 1.0):
+            sigma = fair.segment_sigma(vol_cal, years_cal, quote_sessions, f)
+            var_day = sigma ** 2 / 252.0
+            legs = fair._legs(quote_sessions)
+            total = sum(share * f * var_day + (1.0 - f) * var_day * gap for share, gap in legs)
+            assert total == pytest.approx(vol_cal ** 2 * years_cal, rel=1e-12)
+
+
+def test_segment_sigma_on_expiry_day_restores_what_the_session_clock_drops():
+    """Inside the expiry's own session the old conversion leaves the
+    simulation only f of the quote's variance; the new one gives all of it."""
+    vol_cal, years_cal, frac, f = 0.40, 3.25 / (24 * 365.0), 0.5, 0.55
+    old = math.sqrt(vol_cal ** 2 * years_cal / (frac / 252.0))
+    new = fair.segment_sigma(vol_cal, years_cal, frac, f)
+    assert f * frac * old ** 2 / 252.0 == pytest.approx(f * vol_cal ** 2 * years_cal)
+    assert f * frac * new ** 2 / 252.0 == pytest.approx(vol_cal ** 2 * years_cal)
+
+
+def test_segment_sigma_equals_the_session_clock_when_every_leg_is_watched():
+    sigma = fair.segment_sigma(0.40, 0.012, 4.81, 1.0)
+    assert sigma == pytest.approx(math.sqrt(0.40 ** 2 * 0.012 / (4.81 / 252.0)))
+    assert np.isnan(fair.segment_sigma(float("nan"), 0.012, 4.81, 0.6))
+    assert np.isnan(fair.segment_sigma(0.40, 0.012, 0.0, 0.6))
+
+
 def test_touch_probability_refuses_a_pool_that_is_too_short():
     with pytest.raises(ValueError, match="normal pool"):
         fair.touch_probability(100.0, 110.0, 30.0, 0.4, 0.0, 0.6, True, _pool(legs=4))

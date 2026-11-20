@@ -12,6 +12,14 @@ cycle (`maths.intraday_variance_share`, at least `min_sessions` 60, clipped to
 accepted input not from option prices); `paths` 20,000 antithetic draws,
 `seed` 20260916, sized to the cycle's longest horizon.
 
+`variance` - how the quote's vol becomes the simulation's:
+`per_session` (the default, what the MVP uses): total variance over NYSE
+sessions to the expiry (`maths.expiry_vol`, in the vol step), which leaves the
+simulation `(1-f)` of today's remaining session short; `per_segment`: the
+simulation's gaps and sessions from the quote to the expiry add up to the
+quote's total variance (`maths.segment_sigma`). The column `sigma_used` holds
+the one simulated.
+
 A market it cannot price keeps `fair` NaN and says why in `why`; the gates
 step rules it out.
 """
@@ -75,17 +83,26 @@ def regular_hours(m: pd.DataFrame, cycle: Cycle, p: dict) -> pd.DataFrame:
                       lambda: maths.normal_pool(int(math.ceil(longest)) + 2,
                                                 p.get("paths", 20_000), p.get("seed", 20260916)))
     shares = cycle.memo("intraday_share", dict)
-    fair, f_used = [], []
+    variance = p.get("variance", "per_session")
+    if variance not in ("per_session", "per_segment"):
+        raise ValueError(f"prob.variance must be per_session or per_segment, not {variance!r}")
+    fair, f_used, sigma_used = [], [], []
     for row, priceable in zip(m.itertuples(), ok):
         if row.ticker not in shares:
             shares[row.ticker] = intraday_share(row.ticker, clock[row.ticker], p)
-        f_used.append(shares[row.ticker])
-        fair.append(maths.touch_probability(row.spot, row.level, row.T_sessions, row.sigma,
-                                            row.rate, shares[row.ticker],
-                                            row.contract_type == "hit_up", pool)
+        f = shares[row.ticker]
+        sigma = row.sigma
+        if priceable and variance == "per_segment":
+            sigma = maths.segment_sigma(row.vol_cal, row.years_cal, row.quote_sessions, f)
+            priceable = bool(np.isfinite(sigma))
+        f_used.append(f)
+        sigma_used.append(sigma)
+        fair.append(maths.touch_probability(row.spot, row.level, row.T_sessions, sigma,
+                                            row.rate, f, row.contract_type == "hit_up", pool)
                     if priceable else np.nan)
-    m["fair"], m["f"] = fair, f_used
+    m["fair"], m["f"], m["sigma_used"] = fair, f_used, sigma_used
     m["why"] = np.where(ok, None, vol_why(m))
+    m.loc[ok & m["fair"].isna(), "why"] = "no vol: no quote clock for per_segment"
     return m
 
 

@@ -1,0 +1,4 @@
+# Extension: the MVP with the quote's variance spread over the simulation's
+# own gaps and sessions (prob.variance: per_segment), not over whole sessions.
+extends: mvp
+prob: {variance: per_segment}

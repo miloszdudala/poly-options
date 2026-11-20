@@ -232,6 +232,31 @@ def expiry_vol(smile: "Smile", x: float) -> tuple[float, bool]:
     return float(math.sqrt(max(w, 0.0) / smile.years_model)), clamped
 
 
+def segment_sigma(vol_cal: float, years_cal: float, quote_sessions: float, f: float) -> float:
+    """Session-clock sigma whose simulated legs add up to the quote's variance.
+
+    `touch_probability` gives a leg's session `f * share` of a day's variance
+    and each overnight gap `1 - f`, so from the quote to the expiry close the
+    legs carry `n_full + f * frac` days of variance, where `quote_sessions` =
+    `n_full + frac` (`frac` the part of the quote's own session still to
+    come). Setting that sum equal to the quote's total variance
+    `vol_cal^2 * years_cal`:
+
+        sigma^2 / 252 = vol_cal^2 * years_cal / (n_full + f * frac)
+
+    `expiry_vol` divides by `n_full + frac` instead, which leaves the
+    simulation `(1 - f) * frac` days short (on expiry day: only `f` of what
+    the options say). NaN where there is no quote or no time.
+    """
+    if not (np.isfinite(vol_cal) and np.isfinite(years_cal) and np.isfinite(quote_sessions)):
+        return float("nan")
+    legs = _legs(quote_sessions)
+    days = sum(share * (1.0 if gap else f) for share, gap in legs)
+    if days <= 0:
+        return float("nan")
+    return float(math.sqrt(vol_cal ** 2 * years_cal * TRADING_DAYS / days))
+
+
 # --------------------------------------------------- continuous one-touch
 
 

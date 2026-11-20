@@ -14,7 +14,9 @@ value. Contracts are Cboe's, `open_interest >= 100` or `volume > 0`, `bid > 0`
 vol is moved to the session clock by total variance (`maths.expiry_vol`).
 
 Columns set: `sigma`, `expiry`, `expiry_close`, `exact_expiry`, `clamped`,
-`n_strikes`, `s_quote`.
+`n_strikes`, `s_quote`; and for `prob.variance: per_segment`, the quote itself
+before any clock change: `vol_cal` (calendar-clock vol), `years_cal` and
+`quote_sessions` (NYSE sessions from the quote to the expiry close).
 """
 from __future__ import annotations
 
@@ -53,6 +55,17 @@ def _clocks(close: pd.Timestamp, quote_time, book_time: pd.Timestamp) -> tuple[f
     return years_cal, years_model
 
 
+def _quote_sessions(close: pd.Timestamp, quote_time, book_time: pd.Timestamp) -> float:
+    """NYSE sessions, fractional, from the quote to `close`: the span the
+    quote's total variance covers, counted the way the simulation's legs are."""
+    if pd.isna(close):
+        return float("nan")
+    anchor = book_time if pd.isna(quote_time) else quote_time
+    return float(sessions_remaining(np.array([np.datetime64(anchor.tz_convert(None))]),
+                                    np.array([np.datetime64(close.tz_convert(None))]),
+                                    sessions())[0])
+
+
 NO_SERIOUS = "no vol: no serious-volume strikes close around the barrier"
 
 
@@ -65,11 +78,14 @@ def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) 
     rate = cycle.rate(m["fetched_at_utc"].max())
     closes_by_ticker = cycle.memo("closes_by_ticker", dict)
     smiles = cycle.memo("smiles", dict)
+    spans = cycle.memo("quote_sessions", dict)
     out = {c: [] for c in ("sigma", "expiry", "expiry_close", "exact_expiry", "clamped",
-                           "n_strikes", "s_quote", "vol_why")}
+                           "n_strikes", "s_quote", "vol_why", "vol_cal", "years_cal",
+                           "quote_sessions")}
     for row, live in zip(m.itertuples(), alive(m)):
         values = dict(sigma=np.nan, expiry=None, expiry_close=pd.NaT, exact_expiry=False,
-                      clamped=False, n_strikes=0, s_quote=np.nan, vol_why=None)
+                      clamped=False, n_strikes=0, s_quote=np.nan, vol_why=None,
+                      vol_cal=np.nan, years_cal=np.nan, quote_sessions=np.nan)
         if live:
             ticker = row.ticker
             sym_chain = chain[chain["underlying"] == ticker]
@@ -87,6 +103,8 @@ def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) 
             values["s_quote"] = s_quote
             if expiry is not None:
                 key = (ticker, expiry)
+                if key not in spans:
+                    spans[key] = _quote_sessions(close, row.quote_time, clock[ticker])
                 if key not in smiles:
                     cal, model_years = _clocks(close, row.quote_time, clock[ticker])
                     smiles[key] = maths.build_smile(sym_chain, s_quote, expiry, cal,
@@ -94,6 +112,7 @@ def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) 
                 smile = smiles[key]
                 x = math.log(row.level / s_quote) if at_barrier else 0.0
                 sigma, clamped = maths.expiry_vol(smile, x)
+                vol_cal, years_cal = smile.vol_at(x)[0], smile.years_cal
                 if at_barrier and p.get("min_rel_volume"):
                     skey = (ticker, expiry, "serious")
                     if skey not in smiles:
@@ -103,13 +122,16 @@ def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) 
                             min_rel_volume=p["min_rel_volume"])
                     serious = smiles[skey]
                     vol, clamped = maths.barrier_vol(serious, x, p.get("max_gap", 0.03))
+                    vol_cal, years_cal = vol, serious.years_cal
                     sigma = (math.sqrt(vol ** 2 * serious.years_cal / serious.years_model)
                              if np.isfinite(vol) and serious.years_model > 0 else float("nan"))
                     if not np.isfinite(sigma):
                         values["vol_why"] = NO_SERIOUS
                 values.update(sigma=sigma, expiry=str(expiry.date()), expiry_close=close,
                               exact_expiry=bool(close == row.deadline), clamped=clamped,
-                              n_strikes=smile.n_contracts)
+                              n_strikes=smile.n_contracts, vol_cal=vol_cal,
+                              years_cal=years_cal,
+                              quote_sessions=spans[key])
         for k, v in values.items():
             out[k].append(v)
     for k, v in out.items():
