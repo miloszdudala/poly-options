@@ -16,7 +16,9 @@ vol is moved to the session clock by total variance (`maths.expiry_vol`).
 Columns set: `sigma`, `expiry`, `expiry_close`, `exact_expiry`, `clamped`,
 `n_strikes`, `s_quote`; and for `prob.variance: per_segment`, the quote itself
 before any clock change: `vol_cal` (calendar-clock vol), `years_cal` and
-`quote_sessions` (NYSE sessions from the quote to the expiry close).
+`quote_sessions` (NYSE sessions from the quote to the expiry close); and for
+`prob.local_vol: derman`, `vol_atm_cal`: the calendar-clock vol at the money
+(log-moneyness 0) read off the same curve by the same rule as the barrier's.
 """
 from __future__ import annotations
 
@@ -81,11 +83,12 @@ def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) 
     spans = cycle.memo("quote_sessions", dict)
     out = {c: [] for c in ("sigma", "expiry", "expiry_close", "exact_expiry", "clamped",
                            "n_strikes", "s_quote", "vol_why", "vol_cal", "years_cal",
-                           "quote_sessions")}
+                           "quote_sessions", "vol_atm_cal")}
     for row, live in zip(m.itertuples(), alive(m)):
         values = dict(sigma=np.nan, expiry=None, expiry_close=pd.NaT, exact_expiry=False,
                       clamped=False, n_strikes=0, s_quote=np.nan, vol_why=None,
-                      vol_cal=np.nan, years_cal=np.nan, quote_sessions=np.nan)
+                      vol_cal=np.nan, years_cal=np.nan, quote_sessions=np.nan,
+                      vol_atm_cal=np.nan)
         if live:
             ticker = row.ticker
             sym_chain = chain[chain["underlying"] == ticker]
@@ -113,6 +116,7 @@ def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) 
                 x = math.log(row.level / s_quote) if at_barrier else 0.0
                 sigma, clamped = maths.expiry_vol(smile, x)
                 vol_cal, years_cal = smile.vol_at(x)[0], smile.years_cal
+                vol_atm_cal = smile.vol_at(0.0)[0]
                 if at_barrier and p.get("min_rel_volume"):
                     skey = (ticker, expiry, "serious")
                     if skey not in smiles:
@@ -123,6 +127,7 @@ def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) 
                     serious = smiles[skey]
                     vol, clamped = maths.barrier_vol(serious, x, p.get("max_gap", 0.03))
                     vol_cal, years_cal = vol, serious.years_cal
+                    vol_atm_cal = maths.barrier_vol(serious, 0.0, p.get("max_gap", 0.03))[0]
                     sigma = (math.sqrt(vol ** 2 * serious.years_cal / serious.years_model)
                              if np.isfinite(vol) and serious.years_model > 0 else float("nan"))
                     if not np.isfinite(sigma):
@@ -131,7 +136,7 @@ def _first_expiry_vol(m: pd.DataFrame, cycle: Cycle, p: dict, at_barrier: bool) 
                               exact_expiry=bool(close == row.deadline), clamped=clamped,
                               n_strikes=smile.n_contracts, vol_cal=vol_cal,
                               years_cal=years_cal,
-                              quote_sessions=spans[key])
+                              quote_sessions=spans[key], vol_atm_cal=vol_atm_cal)
         for k, v in values.items():
             out[k].append(v)
     for k, v in out.items():

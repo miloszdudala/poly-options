@@ -312,6 +312,55 @@ def test_segment_sigma_equals_the_session_clock_when_every_leg_is_watched():
     assert np.isnan(fair.segment_sigma(0.40, 0.012, 0.0, 0.6))
 
 
+def test_local_vol_with_one_step_and_no_slope_is_the_flat_simulation():
+    """Same draws, same arithmetic: steps=1, b=0 reproduces touch_probability."""
+    pool = _pool()
+    for barrier, sessions, f in ((110.0, 4.81, 0.55), (93.0, 2.0, 0.6), (101.0, 0.4, 0.7)):
+        is_up = barrier > 100.0
+        flat = fair.touch_probability(100.0, barrier, sessions, 0.45, 0.04, f, is_up, pool)
+        local = fair.touch_probability_local(100.0, barrier, sessions, 0.30, 0.0, 100.0,
+                                             1.5, 0.04, f, is_up, pool, steps=1)
+        assert local == pytest.approx(flat, abs=1e-12)
+
+
+def test_local_vol_with_more_steps_and_no_slope_agrees_with_the_flat_one():
+    """Splitting a constant-vol session into steps changes nothing but noise."""
+    flat = fair.touch_probability(100.0, 108.0, 4.5, 0.45, 0.0, 0.6, True, _pool(paths=100_000))
+    wide = fair.normal_pool(12, paths=100_000, seed=2, width=1 + 8)
+    local = fair.touch_probability_local(100.0, 108.0, 4.5, 0.45, 0.0, 100.0, 1.0, 0.0, 0.6,
+                                         True, wide, steps=8)
+    assert local == pytest.approx(flat, abs=0.006)
+
+
+def test_derman_slope_is_twice_the_smile_slope():
+    b = fair.derman_slope(0.36, 0.30, 95.0, 100.0)
+    assert b == pytest.approx(2 * (0.36 - 0.30) / math.log(0.95))
+    assert fair.derman_slope(0.36, 0.30, 100.0, 100.0) == 0.0
+
+
+def test_local_vol_rising_toward_a_down_barrier_touches_more_and_is_clipped():
+    """Vol that rises as the price falls makes a down barrier likelier than the
+    ATM vol alone. An absurd slope is held at the clip: with every path far
+    below s_quote, sigma_loc is 2a (falling slope) or 0.5a (rising) at every
+    step, so it prices exactly as a flat 2a or 0.5a."""
+    wide = fair.normal_pool(12, paths=40_000, seed=3, width=1 + 4)
+    kw = dict(spot=100.0, barrier=94.0, sessions_left=4.0, scale=1.0,
+              rate=0.0, f=0.6, is_up=False, pool=wide, steps=4)
+    atm = fair.touch_probability_local(a=0.30, b=0.0, s_quote=100.0, **kw)
+    skew = fair.touch_probability_local(a=0.30, b=-1.0, s_quote=100.0, **kw)
+    assert skew > atm
+    for slope, flat_a in ((-1e6, 0.60), (1e6, 0.15)):
+        capped = fair.touch_probability_local(a=0.30, b=slope, s_quote=1e4, **kw)
+        flat = fair.touch_probability_local(a=flat_a, b=0.0, s_quote=1e4, **kw)
+        assert capped == pytest.approx(flat, abs=1e-12)
+
+
+def test_local_vol_refuses_a_pool_too_narrow_for_its_steps():
+    with pytest.raises(ValueError, match="normal pool"):
+        fair.touch_probability_local(100.0, 110.0, 3.0, 0.3, 0.0, 100.0, 1.0, 0.0, 0.6,
+                                     True, _pool(), steps=4)
+
+
 def test_touch_probability_refuses_a_pool_that_is_too_short():
     with pytest.raises(ValueError, match="normal pool"):
         fair.touch_probability(100.0, 110.0, 30.0, 0.4, 0.0, 0.6, True, _pool(legs=4))

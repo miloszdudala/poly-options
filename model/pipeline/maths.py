@@ -250,8 +250,7 @@ def segment_sigma(vol_cal: float, years_cal: float, quote_sessions: float, f: fl
     """
     if not (np.isfinite(vol_cal) and np.isfinite(years_cal) and np.isfinite(quote_sessions)):
         return float("nan")
-    legs = _legs(quote_sessions)
-    days = sum(share * (1.0 if gap else f) for share, gap in legs)
+    days = sum(share * (1.0 if gap else f) for share, gap in _legs(quote_sessions))
     if days <= 0:
         return float("nan")
     return float(math.sqrt(vol_cal ** 2 * years_cal * TRADING_DAYS / days))
@@ -294,14 +293,16 @@ def one_touch(spot, barrier, years, sigma, rate=0.0, direction="up"):
 DEFAULT_PATHS = 20_000
 
 
-def normal_pool(max_legs: int, paths: int = DEFAULT_PATHS, seed: int = 20260916) -> np.ndarray:
-    """Antithetic standard normals, shape (paths, max_legs, 2), generated once.
+def normal_pool(max_legs: int, paths: int = DEFAULT_PATHS, seed: int = 20260916,
+                width: int = 2) -> np.ndarray:
+    """Antithetic standard normals, shape (paths, max_legs, width), generated once.
 
     Reused for every market in a cycle, which makes the run reproducible. The
-    two halves are exact negatives of each other.
+    two halves are exact negatives of each other. `width` 2 is one gap and one
+    session per leg; `touch_probability_local` takes one gap and `steps`.
     """
     rng = np.random.default_rng(seed)
-    half = rng.standard_normal((paths // 2, max_legs, 2))
+    half = rng.standard_normal((paths // 2, max_legs, width))
     return np.concatenate([half, -half], axis=0)
 
 
@@ -381,6 +382,86 @@ def touch_probability(spot: float, barrier: float, sessions_left: float, sigma: 
         else:
             survive *= alive                       # f = 0: nothing inside the session
         log_s = log_c
+        if not alive.any():
+            break
+    survive = np.where(alive, survive, 0.0)
+    return float(1.0 - survive.mean())
+
+
+def derman_slope(vol_barrier: float, vol_atm: float, barrier: float, s_quote: float) -> float:
+    """`b` of Derman's local vol `a + b ln(S / S_quote)`, `a` the ATM vol:
+    twice the implied smile's slope from the money to the barrier (Derman,
+    Kani and Zou 1996). Zero for a barrier at the quote's own spot."""
+    x = math.log(barrier / s_quote)
+    if abs(x) < 1e-12:
+        return 0.0
+    return 2.0 * (vol_barrier - vol_atm) / x
+
+
+def touch_probability_local(spot: float, barrier: float, sessions_left: float,
+                            a: float, b: float, s_quote: float, scale: float,
+                            rate: float, f: float, is_up: bool, pool: np.ndarray,
+                            steps: int, clip: tuple[float, float] = (0.5, 2.0)) -> float:
+    """`touch_probability` with a vol that moves with the path's price.
+
+    Calendar-clock local vol `sigma_loc(S) = a + b ln(S / s_quote)`, held to
+    `[clip[0] * a, clip[1] * a]`, times `scale` to move it to the session
+    clock (the same factor the flat vol was moved by). Each session is cut
+    into `steps` equal steps; every step uses `sigma_loc` at the price it
+    starts from and its own Brownian bridge, and each overnight gap uses it at
+    the close before the gap. With `steps = 1`, `b = 0` and `scale * a` =
+    sigma this is `touch_probability` on the same draws.
+
+    `pool` is `normal_pool(..., width=1 + steps)`: column 0 the gap, columns
+    1..steps the session's steps.
+    """
+    legs = _legs(sessions_left)
+    if len(legs) > pool.shape[1] or pool.shape[2] < 1 + steps:
+        raise ValueError(f"normal pool is {pool.shape[1:]}, this market needs "
+                         f"({len(legs)}, {1 + steps}); size it from the cycle")
+    if not legs or not (a > 0) or scale <= 0 or spot <= 0 or barrier <= 0:
+        beyond_now = (spot >= barrier) if is_up else (spot <= barrier)
+        return 1.0 if beyond_now else 0.0
+
+    bar = math.log(barrier)
+    sgn = 1.0 if is_up else -1.0
+    if sgn * (math.log(spot) - bar) >= 0:
+        return 1.0                      # already beyond: the touch is pending
+
+    dt = 1.0 / TRADING_DAYS
+    lo, hi = clip[0] * a, clip[1] * a
+    log_q = math.log(s_quote)
+
+    def sigma(log_s):
+        return scale * np.clip(a + b * (log_s - log_q), lo, hi)
+
+    paths = pool.shape[0]
+    log_s = np.full(paths, math.log(spot))
+    survive = np.ones(paths)
+    alive = np.ones(paths, dtype=bool)
+
+    for i, (share, has_gap) in enumerate(legs):
+        if has_gap:
+            sig = sigma(log_s)
+            log_o = (log_s + (1.0 - f) * (rate - 0.5 * sig ** 2) * dt
+                     + np.sqrt((1.0 - f) * sig ** 2 * dt) * pool[:, i, 0])
+        else:
+            log_o = log_s
+        alive &= (sgn * (log_o - bar) < 0)          # the gap opened through it
+        x = log_o
+        h = f * dt * share / steps                   # session-years per step
+        for j in range(steps):
+            sig = sigma(x)
+            var = sig ** 2 * h
+            x_next = x + (rate - 0.5 * sig ** 2) * h + np.sqrt(var) * pool[:, i, 1 + j]
+            alive &= (sgn * (x_next - bar) < 0)
+            if h > 0:
+                cross = np.exp(np.clip(-2.0 * (bar - x) * (bar - x_next) / var, -700, 0.0))
+                survive *= np.where(alive, 1.0 - cross, 0.0)
+            else:
+                survive *= alive
+            x = x_next
+        log_s = x
         if not alive.any():
             break
     survive = np.where(alive, survive, 0.0)

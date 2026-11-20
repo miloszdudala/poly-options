@@ -1,0 +1,7 @@
+# Extension: per_segment variance plus a vol that moves with the path's price
+# (Derman's rule: a + b ln(S / S_quote), a the ATM vol, b twice the smile's
+# slope to the barrier, held to [0.5a, 2a]). 13 steps a session (30 minutes):
+# against 52 steps on the same paths, mean error 0.05 and max 0.3 points of
+# probability over 120 markets of 2026-11-13 and 11-16.
+extends: mvp
+prob: {variance: per_segment, local_vol: derman, steps_per_session: 13, local_vol_clip: [0.5, 2.0]}

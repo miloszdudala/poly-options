@@ -20,6 +20,14 @@ simulation's gaps and sessions from the quote to the expiry add up to the
 quote's total variance (`maths.segment_sigma`). The column `sigma_used` holds
 the one simulated.
 
+`local_vol` - `none` (the default): one sigma for the whole path; `derman`:
+sigma moves with the path's price, `a + b ln(S / s_quote)` (Derman, Kani and
+Zou 1996), `a` the ATM vol and `b` twice the smile's slope from the money to
+the barrier, held to `local_vol_clip` x `a` ([0.5, 2]), moved to the session
+clock by the same factor as the flat vol (`sigma_used / vol_cal`), each
+session cut into `steps_per_session` (13) steps (`maths.touch_probability_local`).
+No ATM vol from the curve = no price.
+
 A market it cannot price keeps `fair` NaN and says why in `why`; the gates
 step rules it out.
 """
@@ -86,6 +94,16 @@ def regular_hours(m: pd.DataFrame, cycle: Cycle, p: dict) -> pd.DataFrame:
     variance = p.get("variance", "per_session")
     if variance not in ("per_session", "per_segment"):
         raise ValueError(f"prob.variance must be per_session or per_segment, not {variance!r}")
+    local = p.get("local_vol", "none")
+    if local not in ("none", "derman"):
+        raise ValueError(f"prob.local_vol must be none or derman, not {local!r}")
+    steps = int(p.get("steps_per_session", 13))
+    clip = tuple(p.get("local_vol_clip", [0.5, 2.0]))
+    if local == "derman":
+        wide = cycle.memo(("pool_local", p.get("paths", 20_000), p.get("seed", 20260916), steps),
+                          lambda: maths.normal_pool(int(math.ceil(longest)) + 2,
+                                                    p.get("paths", 20_000),
+                                                    p.get("seed", 20260916), 1 + steps))
     fair, f_used, sigma_used = [], [], []
     for row, priceable in zip(m.itertuples(), ok):
         if row.ticker not in shares:
@@ -95,14 +113,27 @@ def regular_hours(m: pd.DataFrame, cycle: Cycle, p: dict) -> pd.DataFrame:
         if priceable and variance == "per_segment":
             sigma = maths.segment_sigma(row.vol_cal, row.years_cal, row.quote_sessions, f)
             priceable = bool(np.isfinite(sigma))
+        if priceable and local == "derman":
+            priceable = bool(np.isfinite(row.vol_atm_cal) and row.vol_atm_cal > 0
+                             and np.isfinite(row.vol_cal) and row.vol_cal > 0)
         f_used.append(f)
         sigma_used.append(sigma)
-        fair.append(maths.touch_probability(row.spot, row.level, row.T_sessions, sigma,
-                                            row.rate, f, row.contract_type == "hit_up", pool)
-                    if priceable else np.nan)
+        is_up = row.contract_type == "hit_up"
+        if not priceable:
+            fair.append(np.nan)
+        elif local == "derman":
+            b = maths.derman_slope(row.vol_cal, row.vol_atm_cal, row.level, row.s_quote)
+            fair.append(maths.touch_probability_local(
+                row.spot, row.level, row.T_sessions, row.vol_atm_cal, b, row.s_quote,
+                sigma / row.vol_cal, row.rate, f, is_up, wide, steps, clip))
+        else:
+            fair.append(maths.touch_probability(row.spot, row.level, row.T_sessions, sigma,
+                                                row.rate, f, is_up, pool))
     m["fair"], m["f"], m["sigma_used"] = fair, f_used, sigma_used
     m["why"] = np.where(ok, None, vol_why(m))
-    m.loc[ok & m["fair"].isna(), "why"] = "no vol: no quote clock for per_segment"
+    m.loc[ok & m["fair"].isna(), "why"] = ("no vol: no ATM vol or quote clock"
+                                           if local == "derman" else
+                                           "no vol: no quote clock for per_segment")
     return m
 
 
