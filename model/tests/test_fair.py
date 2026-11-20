@@ -312,6 +312,50 @@ def test_segment_sigma_equals_the_session_clock_when_every_leg_is_watched():
     assert np.isnan(fair.segment_sigma(0.40, 0.012, 0.0, 0.6))
 
 
+def _simulated_variance(sigma, sessions_left, f):
+    """What touch_probability's legs carry over `sessions_left` at `sigma`."""
+    var_day = sigma ** 2 / 252.0
+    return sum(share * var_day * (1.0 if gap else f) for share, gap in fair._legs(sessions_left))
+
+
+def test_per_segment_rate_comes_from_the_quote_and_the_legs_from_the_pricing_moment():
+    """w = vol_cal^2 * T_cal / D_eff(quote_time, expiry_close, f); the legs from
+    the pricing moment use that same w. With the quote at the pricing moment
+    they carry exactly the quote's variance; with an older quote they carry
+    only the part still to come, not all of vol_cal^2 * T_cal."""
+    from pipeline.vol import _quote_sessions
+    from pipeline.core import sessions
+    from sessions import sessions_remaining
+
+    close = pd.Timestamp("2026-10-02 20:00", tz="UTC")       # Friday 16:00 ET
+    book = pd.Timestamp("2026-09-28 14:45", tz="UTC")        # Monday 10:45 ET
+    vol_cal, f = 0.3336, 0.537
+
+    def book_sessions(t):
+        return float(sessions_remaining(np.array([np.datetime64(t.tz_convert(None))]),
+                                        np.array([np.datetime64(close.tz_convert(None))]),
+                                        sessions())[0])
+
+    for quote in (book, book - pd.Timedelta(minutes=15), book - pd.Timedelta(minutes=75)):
+        years_cal = (close - quote).total_seconds() / (365.0 * 86400.0)
+        q_sessions = _quote_sessions(close, quote, book)
+        sigma = fair.segment_sigma(vol_cal, years_cal, q_sessions, f)
+        w = vol_cal ** 2 * years_cal
+        d_quote = sum(sh * (1.0 if g else f) for sh, g in fair._legs(q_sessions))
+        d_book = sum(sh * (1.0 if g else f) for sh, g in fair._legs(book_sessions(book)))
+        assert sigma ** 2 / 252.0 == pytest.approx(w / d_quote, rel=1e-12)
+        carried = _simulated_variance(sigma, book_sessions(book), f)
+        assert carried == pytest.approx(w * d_book / d_quote, rel=1e-12)
+        if quote == book:
+            assert q_sessions == book_sessions(book)
+            assert carried == pytest.approx(w, rel=1e-12)
+        else:
+            assert carried < w
+
+    # Quote missing: the pricing moment stands in, as for years_cal.
+    assert _quote_sessions(close, pd.NaT, book) == book_sessions(book)
+
+
 def test_local_vol_with_one_step_and_no_slope_is_the_flat_simulation():
     """Same draws, same arithmetic: steps=1, b=0 reproduces touch_probability."""
     pool = _pool()
