@@ -44,7 +44,7 @@ def repo(tmp_path):
     run("init", "-q", "-b", "main")
     run("config", "user.email", "t@example.com")
     run("config", "user.name", "t")
-    (tmp_path / "proof").mkdir()
+    (tmp_path / rb.BETS).parent.mkdir(parents=True)
     (tmp_path / rb.BETS).write_text(HEADER)
     run("add", rb.BETS)
     run("commit", "-q", "-m", "start")

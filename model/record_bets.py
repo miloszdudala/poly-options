@@ -1,5 +1,5 @@
-"""Add the `mvp` config's bets to proof/BETS.md at the moment they are decided,
-and their results to proof/SETTLEMENTS.md once Polymarket has resolved them.
+"""Add the `mvp` config's bets to proof/live_data/BETS.md at the moment they are decided,
+and their results to proof/live_data/SETTLEMENTS.md once Polymarket has resolved them.
 
     .venv/bin/python model/record_bets.py
 
@@ -62,9 +62,9 @@ sys.path.pop(0)
 sys.dont_write_bytecode = _bytecode
 
 CONFIG = "mvp"
-BETS = "proof/BETS.md"
-SETTLEMENTS = "proof/SETTLEMENTS.md"
-PERFORMANCE = "proof/PERFORMANCE.md"
+BETS = "proof/live_data/BETS.md"
+SETTLEMENTS = "proof/live_data/SETTLEMENTS.md"
+PERFORMANCE = "proof/live_data/PERFORMANCE.md"
 # Earlier books: no new bets, but their open bets are still settled and their
 # weeks still added to their own PERFORMANCE.md.
 ARCHIVED = ["archive/2026-11-06_max_size"]

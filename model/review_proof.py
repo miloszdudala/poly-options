@@ -1,6 +1,6 @@
-"""Set proof/BETS.md against proof/SETTLEMENTS.md: what was promised, what came in.
+"""Set proof/live_data/BETS.md against its SETTLEMENTS.md: what was promised, what came in.
 
-    python model/review_proof.py [proof/]
+    python model/review_proof.py [proof/live_data/]
 
 Standard library only, and it reads nothing but the two files, so anyone with
 a copy of them can run it. Bets and settlements are joined on the market ID.
@@ -59,5 +59,5 @@ def _line(label, n, won, cost, promised, pnl) -> str:
 
 
 if __name__ == "__main__":
-    here = Path(__file__).resolve().parent.parent / "proof"
+    here = Path(__file__).resolve().parent.parent / "proof" / "live_data"
     print(review(Path(sys.argv[1]) if len(sys.argv) > 1 else here))

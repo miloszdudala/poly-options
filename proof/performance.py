@@ -1,7 +1,7 @@
 """Weekly performance of the recorded bets, built from BETS.md and SETTLEMENTS.md alone.
 
-    python proof/performance.py            # print the table
-    python proof/performance.py --write    # save it as proof/PERFORMANCE.md
+    python proof/performance.py [folder]            # print the table (default: live_data/)
+    python proof/performance.py [folder] --write    # save it as <folder>/PERFORMANCE.md
 
 Standard library only, and it reads nothing but BETS.md and SETTLEMENTS.md, so
 anyone with a copy of them can rebuild PERFORMANCE.md and check it.
@@ -57,10 +57,12 @@ def table(bets: str, settlements: str, now: datetime) -> str:
 
 
 def main() -> int:
-    text = table((HERE / "BETS.md").read_text(), (HERE / "SETTLEMENTS.md").read_text(),
+    folders = [a for a in sys.argv[1:] if not a.startswith("--")]
+    folder = Path(folders[0]) if folders else HERE / "live_data"
+    text = table((folder / "BETS.md").read_text(), (folder / "SETTLEMENTS.md").read_text(),
                  datetime.now(timezone.utc))
     if "--write" in sys.argv[1:]:
-        (HERE / "PERFORMANCE.md").write_text(text)
+        (folder / "PERFORMANCE.md").write_text(text)
     print(text, end="")
     return 0
 
