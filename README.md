@@ -45,7 +45,9 @@ The amount of approximation goes beyond what I originally assumed, and I believe
 
 ## The model
 
-The model has two stages: a pricing engine that turns option data into a probability, and a trading strategy that uses those probabilities to decide which bets to take. At the moment only weekly hit markets on stocks and ETFs are traded.
+The model has two stages: a pricing engine that turns option data into a probability, and a trading strategy that uses those probabilities to decide which bets to take.
+
+The potential is larger than what is traded now: Polymarket also lists monthly markets and markets on gold and oil, which can be priced the same way from options. For simplicity, we are building an MVP first and stick to weekly hit markets on stocks and ETFs.
 
 ### Pricing engine (roughly done)
 
@@ -77,17 +79,17 @@ The engine was tested against option and price data from May 2018 to November 20
 
 **Calibration.** Each sample took one point from every week, let the engine calculate the probability that the price touches a randomly chosen level, and checked whether it did. This test was run on 10 samples. Points from the same week are correlated, so the samples are not fully independent; the interval for all 10 samples combined comes from resampling whole weeks, which accounts for this correlation. Since a YES/NO outcome carries little information, this test has a wide error margin.
 
-**PIT.** For the highest (and lowest) price the stock actually reached, the PIT asks the model how likely touching that level was. If the model is right, these probabilities are spread uniformly between 0 and 1, so every observation tests the whole distribution instead of giving a single yes/no. We also ran 10 PIT samples, again one point from each week.
+**PIT.** For the highest (and lowest) price the stock actually reached, the PIT asks the model how likely touching that level was. If the model is right, these probabilities are spread uniformly between 0 and 1, so every observation tests the whole distribution instead of giving a single yes/no. We use the Berkowitz (2001) version, a standard test for risk models. We also ran 10 PIT samples, again one point from each week.
 
-We measured the correlation between samples with a one-way ANOVA by week: the calibration samples are practically independent (intraclass correlation +0.012, worth about 9 independent samples), while the PIT samples are not (+0.163, worth about 4), because in a week of large moves every stock goes further.
+We measured the correlation between samples with a one-way ANOVA by week, a standard way to measure how much observations from the same group have in common. Both PIT and ANOVA are researched, known methods that fit this problem well. The result: the calibration samples are practically independent (intraclass correlation +0.012, worth about 9 independent samples), while the PIT samples are not (+0.163, worth about 4), because in a week of large moves every stock goes further.
 
-The finding is that the engine calculates probabilities very well, with a small bias towards overestimating touch probabilities, by 0.5–0.9 percentage points. This is not statistically significant. Two hypotheses tested so far are that these years were bullish, beating the risk-free rate by far (so the test itself is biased), or that option prices contain a risk premium because investors fear a crash. Further tests gave some support to the first idea, though it did not explain all of the bias, and did not support the second. I have chosen not to include a risk premium in the pricing engine, because the current risk premium is difficult to calculate, especially for single companies, and I believe it is small. I am not entirely sure how independent the tests are, and until I learn more about it, I don't think it is sound to simply make a small adjustment to the engine and test again.
+The finding is that the engine calculates probabilities very well, with a small bias towards overestimating touch probabilities, by 0.5–0.9 percentage points. Two hypotheses tested so far are that these years were bullish, beating the risk-free rate by far (so the test itself is biased), or that option prices contain a risk premium because investors fear a crash. Further tests gave some support to the first idea, though it did not explain all of the bias, and did not support the second. I have chosen not to include a risk premium in the pricing engine, because the current risk premium is difficult to calculate, especially for single companies, and I believe it is small. I am not entirely sure how independent the tests are, and until I learn more about it, I don't think it is sound to simply make a small adjustment to the engine and test again.
 
 Reports: [calibration](proof/past_data/historical/calibration/REPORT.md), [PIT](proof/past_data/historical/pit/REPORT.md), [correlation between samples](proof/past_data/REPORT.md#the-samples-are-correlated).
 
 ### Full model
 
-**Replay.** The model was replayed over the Polymarket order books and option prices I scraped every 15 minutes, from 16 September to 13 November 2026. A bet counts only if the book showed that size at that moment, and every bet is settled on Polymarket's own result. The pricing is as of commit `4146d89`; a rerun on 20 November with the current code gave the same bets, cost and profit in every week. Result: 625 bets, a profit of $29.58 on $297.42 staked (9.9%), against $37.33 of expected value promised at entry. 327 bets won where the model expected 334.7, and 1 of the 9 weeks lost money (−10.0%); weekly returns ranged from −10.0% to +31.2%. [Report](proof/past_data/replay/REPORT.md), [weekly results](proof/past_data/replay/PERFORMANCE.md).
+**Replay.** The model was replayed over the Polymarket order books and option prices I scraped every 15 minutes, from 16 September to 13 November 2026. A bet counts only if the book showed that size at that moment, and every bet is settled on Polymarket's own result. To check that these bets could really have been executed, every order book is read again about 40 seconds after the snapshot: 80–88% of the dollars the model bet were still available to buy at that point. The pricing is as of commit `4146d89`; a rerun on 20 November with the current code gave the same bets, cost and profit in every week. Result: 625 bets, a profit of $29.58 on $297.42 staked (9.9%), against $37.33 of expected value promised at entry. 327 bets won where the model expected 334.7, and 1 of the 9 weeks lost money (−10.0%); weekly returns ranged from −10.0% to +31.2%. [Report](proof/past_data/replay/REPORT.md), [weekly results](proof/past_data/replay/PERFORMANCE.md).
 
 **Random control.** The same nine weeks with 625 bets chosen at random instead of by the model (random snapshot, market and side), repeated 2,000 times, lost $54.83 on average, and none of the 2,000 runs matched the model. Taking the model's own bets but choosing the side at random lost $26.63 on average, again with no run matching the model.
 
@@ -100,13 +102,13 @@ Reports: [calibration](proof/past_data/historical/calibration/REPORT.md), [PIT](
 - **Live is short.** The live record covers one week so far.
 - **Engine bias.** The engine's small bias towards overestimating touch probabilities is not explained yet (see [Testing](#pricing-engine)).
 - **Paper only.** One share is below Polymarket's $1 minimum, so the strategy has not been run with real money.
-- **Narrow scope.** Only weekly hit markets on single stocks and ETFs are tested; no index and no monthly markets.
+- **Narrow scope.** As an MVP, only weekly hit markets on single stocks and ETFs are tested so far; no index, no monthly markets, no gold or oil.
 
 ## Plans
 
 I consider the current phase a sufficient proof of concept: despite the approximations, the results so far suggest the idea works on real data. What the project needs now is a sounder design, so in December, after my first-semester finals, I plan to take a careful approach, evaluating each step of the pipeline and then:
 - building a better trading strategy: every bet says a stock will go up or down, so a smart balance of UP and DOWN bets should cancel out much of the market movement and leave mostly the return from mispricing. We can go further by also balancing bets on a volatile against a calm week, or by modelling where the stock might go;
-- expanding to other option-like market types.
+- expanding to monthly markets, gold and oil, and other option-like market types.
 
 ## Where to find things
 
@@ -121,6 +123,6 @@ I consider the current phase a sufficient proof of concept: despite the approxim
 
 I first realised in January 2026 that Polymarket bets carry some resemblance to options, and wrote a short script that took tables copy-pasted by hand from the Nasdaq website and Polymarket. It identified some mispricings, but it relied on a one-time copy-paste. In September, using Claude Code, I took a more structured approach, scraping both platforms every 15 minutes during open sessions to collect a large amount of data.
 
-All of the code was written by AI (Claude Code), and I can assure very little about its quality. The live reporting is partly there to show that the project works despite potentially poor code. Initially I let Claude make many decisions without realising how far real bets are from an ideal 1-to-1 option equivalent, which resulted in a lot of mistakes. Now I am more careful: I research and make all the important decisions myself, such as which markets to target, how to price them, which models to test and how to evaluate them.
+All of the code was written by AI (Claude Code), and I can assure very little about its quality. The live reporting is partly there to show that the project works despite potentially poor code. Initially I let Claude make many decisions without realising how far real bets are from an ideal 1-to-1 option equivalent, which resulted in a lot of mistakes. Now I am more careful: the research and all the important decisions in this project are mine. The AI writes the code and proposes options; I decide.
 
-This README was reorganised and written up by AI (Claude) from my rough note, after a discussion about its structure and content.
+This README was reorganised and written up by AI (Claude) from my rough notes, after a discussion about its structure and content.
