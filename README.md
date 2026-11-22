@@ -47,6 +47,8 @@ The amount of approximation goes beyond what I originally assumed, and I believe
 
 The model has two stages: a pricing engine that turns option data into a probability, and a trading strategy that uses those probabilities to decide which bets to take.
 
+We focus on hit markets for two reasons. First, volume: the close-above markets lost most of their volume during 2026 and their spreads widened, while hit markets now trade more. Second, pricing a close-above bet from options is close to trivial: its probability can be read directly from the prices of two neighbouring options (a call spread). A hit bet depends on the path the price takes, which option prices do not pin down, so it needs a real model. That is where the interesting work, and the risk of error, is.
+
 The potential is larger than what is traded now: Polymarket also lists monthly markets and markets on gold and oil, which can be priced the same way from options. For simplicity, we are building an MVP first and stick to weekly hit markets on stocks and ETFs.
 
 ### Pricing engine (roughly done)
