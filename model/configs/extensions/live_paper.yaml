@@ -1,0 +1,9 @@
+# The live paper book (record_bets.py): the MVP plus the vol-jump gate
+# (decided 2026-11-23, live paper only): no bet when the barrier vol moved
+# more than 4.1% (relative) between the latest chain and the one 15 minutes
+# before it, or when there is no earlier vol - ~2pp of touch probability.
+extends: mvp
+vol: {before_minutes: 15}
+gates:
+  drop: [opening, touch_pending, no_fair, vol_jump, deep_otm, earnings_gap, earnings_inside, quote_ahead_of_book]
+  max_rel_vol_change: 0.041

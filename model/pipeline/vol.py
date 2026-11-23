@@ -16,7 +16,9 @@ vol is moved to the session clock by total variance (`maths.expiry_vol`).
 Columns set: `sigma`, `expiry`, `expiry_close`, `exact_expiry`, `clamped`,
 `n_strikes`, `s_quote`; and for `prob.variance: per_segment`, the quote itself
 before any clock change: `vol_cal` (calendar-clock vol), `years_cal` and
-`quote_sessions` (NYSE sessions from the quote to the expiry close); and for
+`quote_sessions` (NYSE sessions from the quote to the expiry close); with
+`before_minutes`, `vol_before`: the same market's barrier vol from the chain
+that many minutes earlier (for the `vol_jump` gate); and for
 `prob.local_vol: derman`, `vol_atm_cal`: the calendar-clock vol at the money
 (log-moneyness 0) read off the same curve by the same rule as the barrier's.
 """
@@ -27,6 +29,7 @@ import math
 import numpy as np
 import pandas as pd
 
+import store
 from pipeline import maths
 from pipeline.core import Cycle, alive, sessions, variant
 from sessions import TRADING_DAYS, deadline_close, sessions_remaining
@@ -150,9 +153,43 @@ def atm_first_expiry_after(m, cycle, p):
     return _first_expiry_vol(m, cycle, p, at_barrier=False)
 
 
+def earlier_cycle(cycle: Cycle, minutes: float, tolerance: float = 4.0) -> str | None:
+    """The same day's cycle closest to `minutes` before this one, if one lies
+    within `tolerance` minutes of that time."""
+    start = pd.Timestamp(store.cycle_start(cycle.id))
+    want = start - pd.Timedelta(minutes=minutes)
+    best, gap = None, pd.Timedelta(minutes=tolerance)
+    for cid in store.session_cycles(cycle.date):
+        off = abs(pd.Timestamp(store.cycle_start(cid)) - want)
+        if cid < cycle.id and off <= gap:
+            best, gap = cid, off
+    return best
+
+
+def vol_before(m: pd.DataFrame, cycle: Cycle, p: dict) -> pd.Series:
+    """The barrier vol (calendar clock, as quoted) the chain `before_minutes`
+    earlier gave each market, by the same rule; NaN where there is none.
+    That chain's own quote times and spot are used, whatever its gates said."""
+    prev_id = earlier_cycle(cycle, p["before_minutes"])
+    if prev_id is None:
+        return pd.Series(np.nan, index=m.index)
+    prev = Cycle(prev_id, cycle.contract_types, cycle.venue)
+    shift = pd.Timestamp(store.cycle_start(cycle.id)) - pd.Timestamp(store.cycle_start(prev_id))
+    mb = m[["ticker", "level", "deadline", "spot", "fetched_at_utc", "gate"]].copy()
+    mb["fetched_at_utc"] = mb["fetched_at_utc"] - shift
+    mb["quote_time"] = pd.to_datetime(mb["ticker"].map(prev.quote_times()), utc=True)
+    mb["quote_age_s"] = (mb["fetched_at_utc"] - mb["quote_time"]).dt.total_seconds()
+    rest = {k: v for k, v in p.items() if k != "before_minutes"}
+    return _first_expiry_vol(mb, prev, rest, at_barrier=True)["vol_cal"]
+
+
 @variant("vol", "strike_first_expiry_after")
 def strike_first_expiry_after(m, cycle, p):
-    return _first_expiry_vol(m, cycle, p, at_barrier=True)
+    m = _first_expiry_vol(m, cycle, {k: v for k, v in p.items() if k != "before_minutes"},
+                          at_barrier=True)
+    if p.get("before_minutes"):
+        m["vol_before"] = vol_before(m, cycle, p).values
+    return m
 
 
 @variant("vol", "none")

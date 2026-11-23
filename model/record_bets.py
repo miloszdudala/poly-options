@@ -1,4 +1,4 @@
-"""Add the `mvp` config's bets to proof/live_data/BETS.md at the moment they are decided,
+"""Add the `live_paper` config's bets (the MVP plus the vol-jump gate, from 2026-11-23) to proof/live_data/BETS.md at the moment they are decided,
 and their results to proof/live_data/SETTLEMENTS.md once Polymarket has resolved them.
 
     .venv/bin/python model/record_bets.py
@@ -61,7 +61,7 @@ import performance  # noqa: E402
 sys.path.pop(0)
 sys.dont_write_bytecode = _bytecode
 
-CONFIG = "mvp"
+CONFIG = "live_paper"
 BETS = "proof/live_data/BETS.md"
 SETTLEMENTS = "proof/live_data/SETTLEMENTS.md"
 PERFORMANCE = "proof/live_data/PERFORMANCE.md"
