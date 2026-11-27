@@ -108,6 +108,12 @@ def test_the_opening_gate_rules_out_books_read_before_ten():
     assert list(gates.opening(m, None, {"opening_minutes": 30})) == [True, False, False]
 
 
+def test_deadline_day_gate_covers_the_deadline_s_own_session_only():
+    from pipeline import gates
+    m = pd.DataFrame({"T_sessions": [0.2, 1.0, 1.01, 4.5]})
+    assert list(gates.deadline_day(m, None, {})) == [True, True, False, False]
+
+
 def test_the_earnings_gate_holds_until_the_report_and_lets_go_after(monkeypatch):
     from pipeline import gates
     when = pd.Timestamp("2026-11-17T21:00:00Z")                         # Tuesday, after the close

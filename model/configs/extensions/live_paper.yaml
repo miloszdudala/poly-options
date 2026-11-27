@@ -2,8 +2,13 @@
 # (decided 2026-11-23, live paper only): no bet when the barrier vol moved
 # more than 4.1% (relative) between the latest chain and the one 15 minutes
 # before it, or when there is no earlier vol - ~2pp of touch probability.
+# Plus, temporarily from 2026-11-27: no bets on the deadline's own day
+# (deadline_day). The model is known to be wrong there, not merely unlucky:
+# the simulation gets only f (~0.6) of the variance the options quote for the
+# rest of that session, and the complete fix (prob.variance: per_segment)
+# overstates touches until a second error is understood.
 extends: mvp
 vol: {before_minutes: 15}
 gates:
-  drop: [opening, touch_pending, no_fair, vol_jump, deep_otm, earnings_gap, earnings_inside, quote_ahead_of_book]
+  drop: [opening, touch_pending, deadline_day, no_fair, vol_jump, deep_otm, earnings_gap, earnings_inside, quote_ahead_of_book]
   max_rel_vol_change: 0.041

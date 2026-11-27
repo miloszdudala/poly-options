@@ -13,6 +13,7 @@ rules out the markets it catches (`gate` = its reason). Available gates:
 | `quote_ahead_of_book` | chain prints newer than the book (`quote_age_s < 0`) | review 2026-09-16 |
 | `stale_book` | books untouched for longer than `inputs.stale_book_s` | available, not used |
 | `vol_jump` | barrier vol (`vol_cal`) moved more than `max_rel_vol_change` (relative) from the chain `vol.before_minutes` earlier, or there is no earlier vol. The chain is ~15 min delayed, so the last observed move stands in for the unseen one; the touch probability moves at most 0.48 x the relative vol change, so 0.041 caps it at ~2pp | decided 2026-11-23 for the live paper book only (`live_paper`) |
+| `deadline_day` | books read during the deadline's own session (`T_sessions <= 1`). There the simulation carries only `f` of the variance the options quote (see `prob.variance`), so it understates touches | temporary, 2026-11-27, live paper book only (`live_paper`), until the cause is fixed |
 | `opening` | books read in the first `opening_minutes` (30) after the 9:30 ET open | decided 2026-11-16: option vols jump ~3x more per 15 min then, and replayed bets placed then lost (-2% vs +6% later) |
 """
 from __future__ import annotations
@@ -100,6 +101,10 @@ def vol_jump(m, cycle, p) -> pd.Series:
     return ~(change <= p["max_rel_vol_change"])
 
 
+def deadline_day(m, cycle, p) -> pd.Series:
+    return m["T_sessions"] <= 1.0
+
+
 def opening(m, cycle, p) -> pd.Series:
     local = pd.to_datetime(m["fetched_at_utc"], utc=True).dt.tz_convert("America/New_York")
     minutes = local.dt.hour * 60 + local.dt.minute - (9 * 60 + 30)
@@ -109,7 +114,8 @@ def opening(m, cycle, p) -> pd.Series:
 GATES = {"touch_pending": touch_pending, "no_fair": no_fair, "deep_otm": deep_otm,
          "earnings_gap": earnings_gap, "earnings_inside": earnings_inside,
          "quote_ahead_of_book": quote_ahead_of_book,
-         "stale_book": stale_book, "opening": opening, "vol_jump": vol_jump}
+         "stale_book": stale_book, "opening": opening, "vol_jump": vol_jump,
+         "deadline_day": deadline_day}
 
 
 @variant("gates", "standard")
