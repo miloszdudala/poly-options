@@ -1,4 +1,4 @@
-"""Option chains from Cboe delayed quotes and yfinance.
+"""Option chains from Nasdaq (Cboe until 2026-11-19) delayed quotes and yfinance.
 
 Both sources are collected when available so they can be cross-checked. The
 source's own IV/greeks are stored verbatim but treated as unverified; we keep
@@ -165,6 +165,111 @@ def fetch_cboe(http: Http, und: Underlying, cycle_id: str,
     return rows, spot
 
 
+# ------------------------------------------------------------------- Nasdaq
+
+
+def _num(text) -> float | None:
+    """Nasdaq prints every number as text: '1,234.50', '$355.58', '--' for none."""
+    try:
+        return float(str(text).replace(",", "").replace("$", ""))
+    except ValueError:
+        return None
+
+
+def fetch_nasdaq(http: Http, und: Underlying, cycle_id: str,
+                 strikes: "StrikeFilter | None" = None) -> tuple[list[dict], list[dict]]:
+    """Nasdaq's delayed composite (OPRA) chain, written as Cboe's rows were.
+
+    The replacement for Cboe from 2026-11-27 (cdn.cboe.com went behind
+    Cloudflare on 2026-11-20). One row of the payload is one strike of one
+    expiry with the call and the put side by side; the contract's OCC symbol is
+    the tail of its `drillDownURL` ('aapl--261127c00110000').
+
+    What Nasdaq does not publish stays None: quote sizes, IV and greeks (the
+    model inverts the mid itself), the day's open/high/low, and above all any
+    time: no per-contract trade time and no quote time. `model/store.py`
+    therefore takes the quote time as the fetch time less the feed's delay.
+    """
+    if not und.nasdaq_class:
+        return [], []
+    cfg = markets_cfg()["nasdaq"]
+    today = now_utc().astimezone(market_tz()).date()
+    horizon = today + dt.timedelta(days=underlyings_cfg()["options"]["max_days_out"])
+    # Far enough for the year-end December expiry; select_expiries trims the rest.
+    until = max(horizon, dt.date(today.year, 12, 31))
+    payload = http.get(
+        f"{cfg['base']}/{und.symbol}/option-chain", venue="nasdaq", identifier=und.symbol,
+        params={"assetclass": und.nasdaq_class, "limit": cfg["limit"],
+                "fromdate": today.isoformat(), "todate": until.isoformat(),
+                "excode": "oprac", "callput": "callput", "money": "all", "type": "all"})
+    data = (payload or {}).get("data") or {}
+    table = (data.get("table") or {}).get("rows") or []
+    if not table:
+        if payload:
+            http.failures.append({"venue": "nasdaq", "identifier": und.symbol, "url": "",
+                                  "error": f"empty chain: {payload.get('status')}",
+                                  "failed_at_utc": utc_iso()})
+        return [], []
+
+    if raw_enabled("option_chains"):
+        write_raw("nasdaq", und.symbol, payload, cycle_id)
+    fetched_at = utc_iso()
+    # 'LAST TRADE: $355.58 (AS OF NOV 25, 2026)' / 'LATEST INDEX VALUE: 26,046.90 (...)'
+    found = re.search(r":\s*\$?([\d,]+\.?\d*)", data.get("lastTrade") or "")
+    spot_price = _num(found.group(1)) if found else None
+
+    contracts = []
+    for row in table:
+        occ = parse_occ((row.get("drillDownURL") or "").rsplit("/", 1)[-1].replace("-", ""))
+        if occ:
+            contracts.append((row, occ))
+    wanted = set(select_expiries([occ["expiry"] for _, occ in contracts]))
+
+    rows = []
+    for row, occ in contracts:
+        if occ["expiry"] not in wanted:
+            continue
+        if strikes and not strikes.accepts(und.symbol, occ["strike"], spot_price):
+            continue
+        ymd = occ["expiry"][2:].replace("-", "")
+        strike = f"{round(occ['strike'] * 1000):08d}"
+        for kind, side in (("call", "c"), ("put", "p")):
+            rows.append({
+                "cycle_id": cycle_id,
+                "fetched_at_utc": fetched_at,
+                "source": "nasdaq",
+                "symbol": und.symbol,
+                "underlying": und.symbol,
+                "contract_symbol": f"{occ['root']}{ymd}{kind[0].upper()}{strike}",
+                "option_type": kind,
+                "expiry": occ["expiry"],
+                "strike": occ["strike"],
+                "bid": _num(row.get(f"{side}_Bid")),
+                "ask": _num(row.get(f"{side}_Ask")),
+                "bid_size": None, "ask_size": None,
+                "last_price": _num(row.get(f"{side}_Last")),
+                "last_trade_time_utc": None,
+                "volume": _num(row.get(f"{side}_Volume")),
+                "open_interest": _num(row.get(f"{side}_Openinterest")),
+                "source_iv": None, "source_delta": None, "source_gamma": None,
+                "source_theta": None, "source_vega": None, "source_rho": None,
+                "source_theo": None,
+                "source_quote_time_utc": None,
+                "open": None, "high": None, "low": None,
+                "prev_day_close": None,
+                "in_the_money": None,
+            })
+
+    spot = [{
+        "cycle_id": cycle_id, "fetched_at_utc": fetched_at,
+        "source": "nasdaq", "symbol": und.symbol, "last_price": spot_price,
+        "bid": None, "ask": None, "bid_size": None, "ask_size": None,
+        "open": None, "high": None, "low": None, "prev_close": None,
+        "volume": None, "iv30": None, "source_quote_time_utc": None,
+    }]
+    return rows, spot
+
+
 # ----------------------------------------------------------------- yfinance
 
 
@@ -257,34 +362,38 @@ def collect_options(http: Http, underlyings: list[Underlying], cycle_id: str,
                     include_yfinance: bool | None = None) -> dict:
     """Collect option chains; failures are isolated per underlying.
 
-    Cboe is the per-cycle source: it covers all 25 tickers in ~29 s and carries
-    bid/ask sizes, greeks and per-contract quote times. yfinance costs ~406 s for
+    Cboe was the per-cycle source until it was blocked on 2026-11-20: all 25
+    tickers in ~29 s, with bid/ask sizes, greeks and per-contract quote times.
+    Nasdaq replaces it (bid/ask, volume and open interest only; no SPX).
+    yfinance costs ~406 s for
     the same tickers because every expiry is a separate paced request, so by
     default it runs only in the daily job, as an independent cross-check.
     """
-    use_cboe = markets_cfg()["cboe"].get("enabled", True)
+    # The per-cycle chain: Nasdaq from 2026-11-27, Cboe before (now blocked).
+    feeds = [(name, fetch) for name, fetch in (("cboe", fetch_cboe), ("nasdaq", fetch_nasdaq))
+             if markets_cfg()[name].get("enabled", True)]
     if include_yfinance is None:
         include_yfinance = underlyings_cfg()["options"].get("yfinance_every_cycle", False)
 
     strikes = StrikeFilter()
     opt_rows: list[dict] = []
     spot_rows: list[dict] = []
-    per_source = {"cboe": 0, "yfinance": 0}
+    per_source = {"cboe": 0, "nasdaq": 0, "yfinance": 0}
 
     for und in underlyings:
         spot = None
-        if use_cboe:
+        for name, fetch in feeds:
             try:
-                rows, spot_got = fetch_cboe(http, und, cycle_id, strikes)
+                rows, spot_got = fetch(http, und, cycle_id, strikes)
             except Exception as exc:
-                log.exception("cboe failed for %s", und.symbol)
-                http.failures.append({"venue": "cboe", "identifier": und.symbol,
+                log.exception("%s failed for %s", name, und.symbol)
+                http.failures.append({"venue": name, "identifier": und.symbol,
                                       "url": "", "error": str(exc),
                                       "failed_at_utc": utc_iso()})
                 rows, spot_got = [], []
             opt_rows += rows
             spot_rows += spot_got
-            per_source["cboe"] += len(rows)
+            per_source[name] += len(rows)
             if spot_got:
                 spot = spot_got[0].get("last_price")
 
@@ -298,8 +407,8 @@ def collect_options(http: Http, underlyings: list[Underlying], cycle_id: str,
             spot_rows += spot_got
             per_source["yfinance"] += len(rows)
 
-    log.info("options: cboe=%d yfinance=%d | %s",
-             per_source["cboe"], per_source["yfinance"], strikes.summary())
+    log.info("options: cboe=%d nasdaq=%d yfinance=%d | %s", per_source["cboe"],
+             per_source["nasdaq"], per_source["yfinance"], strikes.summary())
 
     if opt_rows:
         write_table("option_quotes", opt_rows)

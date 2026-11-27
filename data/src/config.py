@@ -46,6 +46,8 @@ class Underlying:
         self.cboe_symbol = o.get("cboe_symbol", symbol)
         self.yf_symbol = o.get("yf_symbol", symbol)
         self.is_index = bool(o.get("is_index", False))
+        # Nasdaq's asset class for the option chain; None: Nasdaq has no chain.
+        self.nasdaq_class = o.get("nasdaq_class", "stocks")
 
     def __repr__(self) -> str:
         return f"Underlying({self.symbol}, tier={self.tier})"

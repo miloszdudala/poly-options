@@ -1,6 +1,7 @@
 # Underlyings to collect options / spot / bars for.
 # cboe_symbol: symbol used by the Cboe delayed-quotes CDN (indices take a leading underscore).
 # yf_symbol:   symbol used by yfinance.
+# nasdaq_class: asset class in Nasdaq's option-chain API (default stocks; null: no chain there).
 # options:     collect an option chain for this name.
 tiers:
   tier1:
@@ -22,10 +23,18 @@ overrides:
     cboe_symbol: _SPX
     yf_symbol: ^SPX
     is_index: true
+    nasdaq_class: null     # Nasdaq publishes no SPX chain
   NDX:
     cboe_symbol: _NDX
     yf_symbol: ^NDX
     is_index: true
+    nasdaq_class: index
+  SPY: {nasdaq_class: etf}
+  EWY: {nasdaq_class: etf}
+  GLD: {nasdaq_class: etf}
+  SLV: {nasdaq_class: etf}
+  USO: {nasdaq_class: etf}
+  UUP: {nasdaq_class: etf}
 
 # Futures proxies for the commodity / FX hit markets (free sources only).
 futures:

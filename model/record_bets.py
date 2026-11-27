@@ -71,6 +71,12 @@ ARCHIVED = ["archive/2026-11-06_max_size"]
 BOOKS = [(BETS, SETTLEMENTS, PERFORMANCE)] + [
     (f"{d}/BETS.md", f"{d}/SETTLEMENTS.md", f"{d}/PERFORMANCE.md") for d in ARCHIVED]
 LAST_CYCLE = HERE / "store" / "record_last_cycle"      # not in git
+# The option chain changed source (Cboe -> Nasdaq) on 2026-11-27. Until the new
+# chain has been checked, new bets go to this file (same table, outside the
+# repo, nothing committed) and not to proof/. Set to None to record to proof/
+# again. Settlements of the bets already in proof/ are recorded as before.
+VALIDATION: Path | None = (Path.home() / "poly-options-results"
+                           / "2026-11-27_nasdaq_validation" / "BETS.md")
 MAX_BOOK_AGE = pd.Timedelta(minutes=15)                # older cycles are skipped, not recorded late
 MARKET_ID_COLUMN = 3
 SETTLED_ID_COLUMN = 2
@@ -257,7 +263,8 @@ def record_cycle(cycle_id: str) -> bool:
     store.bars_5m = lambda: bars_with_today(stored, today)   # this process only
 
     try:
-        bets, _ = decide(cycle_id, config, market_ids(read_main(REPO)))
+        trial = VALIDATION.read_text() if VALIDATION and VALIDATION.exists() else ""
+        bets, _ = decide(cycle_id, config, market_ids(read_main(REPO)) | market_ids(trial))
     except NotReady as exc:         # SPY's bars are behind: the next run tries again
         print(f"  {exc}", file=sys.stderr)
         return False
@@ -268,11 +275,17 @@ def record_cycle(cycle_id: str) -> bool:
         questions = questions_for([p.market_id for p in bets])
         rows = "".join(table_row(p, written_at, code, questions.get(p.market_id, ""))
                        for p in bets)
-        append_to_main(REPO, rows, f"{len(bets)} bet(s) from cycle {cycle_id}")
+        if VALIDATION:
+            VALIDATION.parent.mkdir(parents=True, exist_ok=True)
+            head = "" if trial else "".join(read_main(REPO).splitlines(keepends=True)[:2])
+            with VALIDATION.open("a") as out:
+                out.write(head + rows)
+        else:
+            append_to_main(REPO, rows, f"{len(bets)} bet(s) from cycle {cycle_id}")
     LAST_CYCLE.parent.mkdir(parents=True, exist_ok=True)
     LAST_CYCLE.write_text(cycle_id)
     left_out = f", left out {' '.join(stale)}" if stale else ""
-    print(f"{cycle_id}: {len(bets)} bet(s){left_out}")
+    print(f"{cycle_id}: {len(bets)} bet(s){' (validation file)' if VALIDATION else ''}{left_out}")
     return True
 
 

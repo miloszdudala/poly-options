@@ -71,3 +71,47 @@ def test_bad_date_strings_are_ignored_not_fatal():
 def test_result_is_sorted_and_unique():
     got = select_expiries(ALL + ALL, dt.date(2026, 9, 16))
     assert got == sorted(set(got))
+
+
+def test_nasdaq_rows_take_cboe_s_shape():
+    """One Nasdaq row (a strike, call and put side by side) becomes two rows in
+    the stored format, with the OCC symbol Cboe used and text turned to numbers."""
+    from config import underlyings
+    from options import fetch_nasdaq
+
+    expiry = dt.date.today() + dt.timedelta(days=7)
+    code = expiry.strftime("%y%m%d")
+
+    class FakeHttp:
+        failures: list = []
+
+        def get(self, url, **kw):
+            assert url.endswith("/NDX/option-chain") and kw["params"]["assetclass"] == "index"
+            return {"data": {"lastTrade": "LATEST INDEX VALUE: 26,046.90 (AS OF NOV 25, 2026)",
+                             "table": {"rows": [
+                {"expirygroup": "December 4, 2026", "strike": None, "drillDownURL": None},
+                {"expirygroup": "", "strike": "25,875.00", "c_Last": "--", "c_Bid": "825.60",
+                 "c_Ask": "903.20", "c_Volume": "--", "c_Openinterest": "1,204",
+                 "p_Last": "404.57", "p_Bid": "--", "p_Ask": "713.50", "p_Volume": "12",
+                 "p_Openinterest": "--",
+                 "drillDownURL": f"/market-activity/index/ndx/option-chain/call-put-options/ndxp--{code}c25875000"},
+            ]}}}
+
+    ndx = next(u for u in underlyings() if u.symbol == "NDX")
+    rows, spot = fetch_nasdaq(FakeHttp(), ndx, "cycle")
+    call, put = rows
+    assert spot[0]["last_price"] == 26046.90 and spot[0]["source"] == "nasdaq"
+    assert call["contract_symbol"] == f"NDXP{code}C25875000"
+    assert put["contract_symbol"] == f"NDXP{code}P25875000"
+    assert (call["expiry"], call["strike"], call["option_type"]) == (expiry.isoformat(), 25875.0, "call")
+    assert (call["bid"], call["ask"], call["volume"], call["open_interest"]) == (825.6, 903.2, None, 1204.0)
+    assert (put["bid"], put["ask"], put["volume"], put["last_price"]) == (None, 713.5, 12.0, 404.57)
+    assert parse_occ(call["contract_symbol"])["strike"] == 25875.0
+
+
+def test_nasdaq_skips_a_symbol_it_has_no_chain_for():
+    from config import underlyings
+    from options import fetch_nasdaq
+
+    spx = next(u for u in underlyings() if u.symbol == "SPX")
+    assert fetch_nasdaq(None, spx, "cycle") == ([], [])

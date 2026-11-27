@@ -109,8 +109,15 @@ kalshi:
     year_end: [KXINXY, KXINXDIRY, KXNASDAQ100Y, KXNDQDIRY, KXINXPOS, KXNASDAQ100POS]
     barriers: [KXINXMAXY, KXINXMINY, KXNASDAQ100MAXY, KXNASDAQ100MINY, KXSP500WHEN]
 
+# Blocked since 2026-11-20 (redirects to cdn-api.cboe.com: Cloudflare, HTTP 403).
 cboe:
   base: https://cdn.cboe.com/api/global/delayed_quotes/options
+  enabled: false
+
+# The option chains from 2026-11-27. No key; one request per ticker.
+nasdaq:
+  base: https://api.nasdaq.com/api/quote
+  limit: 20000          # rows per request: above any chain we ask for (NDX ~6,400)
   enabled: true
 
 rates:

@@ -198,6 +198,12 @@ def market_book_times(cycle_id: str) -> pd.DataFrame:
 # ---------------------------------------------------------- option chain
 
 EXTRA_ROOTS = {"SPX": "SPXW", "NDX": "NDXP"}     # standard weeklies with their own root
+# The per-cycle chain: Cboe to 2026-11-19, Nasdaq from 2026-11-27 (same schema,
+# and at the close both carry the same composite quotes). Never both in a cycle.
+CHAIN_SOURCES = "source in ('cboe', 'nasdaq')"
+# Nasdaq publishes no quote or trade time. Its chain is taken to be this old
+# when fetched: the "at least 15 minutes" it states. An assumption (2026-11-27).
+NASDAQ_DELAY = pd.Timedelta(minutes=15)
 
 
 def option_chain(cycle_id: str, symbols: tuple[str, ...] | None = None) -> pd.DataFrame:
@@ -230,7 +236,7 @@ def option_chain(cycle_id: str, symbols: tuple[str, ...] | None = None) -> pd.Da
                source_iv, source_delta
         from (select *, regexp_extract(contract_symbol, '^[A-Z]+') as root
               from {_src('option_quotes')})
-        where cycle_id = '{cycle_id}' and source = 'cboe'
+        where cycle_id = '{cycle_id}' and {CHAIN_SOURCES}
           and bid > 0 and (open_interest >= 100 or volume > 0) {where}
           and (root = underlying or {other_roots})
     """)
@@ -246,14 +252,20 @@ def quote_times(cycle_id: str) -> pd.Series:
 
     Never `source_quote_time_utc`, which is when Cboe generated the file - about
     our fetch time, and 15 minutes after the newest print inside it.
+
+    Nasdaq's rows carry no trade times: there it is the fetch time less
+    `NASDAQ_DELAY`.
     """
     df = _q(f"""
-        select underlying, max(last_trade_time_utc) quote_time
+        select underlying, max(last_trade_time_utc) quote_time,
+               max(case when source = 'nasdaq' then fetched_at_utc end) nasdaq_fetch
         from {_src('option_quotes')}
-        where cycle_id = '{cycle_id}' and source = 'cboe' and bid > 0
+        where cycle_id = '{cycle_id}' and {CHAIN_SOURCES} and bid > 0
         group by 1
     """)
     stamps = pd.to_datetime(df["quote_time"], format="ISO8601", utc=True, errors="coerce")
+    fetched = pd.to_datetime(df["nasdaq_fetch"], format="ISO8601", utc=True, errors="coerce")
+    stamps = stamps.fillna(fetched - NASDAQ_DELAY)
     return pd.Series(stamps.tolist(), index=df["underlying"].tolist(), dtype="object")
 
 
@@ -261,7 +273,7 @@ def cboe_spot(cycle_id: str) -> pd.DataFrame:
     """Cboe's own underlying quote for the cycle: the fallback spot, 15 min old."""
     df = _q(f"""
         select symbol, last_price, iv30 from {_src('underlying_quotes')}
-        where cycle_id = '{cycle_id}' and source = 'cboe'
+        where cycle_id = '{cycle_id}' and {CHAIN_SOURCES}
     """)
     return df
 
